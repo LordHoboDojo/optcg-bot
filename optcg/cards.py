@@ -29,6 +29,9 @@ class Timing(str, Enum):
     COUNTER = "Counter"    # Event cards only (10-2-4)
     TRIGGER = "Trigger"    # activated from Life on damage (10-1-5)
     START_OF_GAME = "Start of Game"
+    START_OF_TURN = "Start of Turn"       # 6-2-2: "at the start of your/your opponent's turn"
+    START_OF_MAIN = "Start of Main Phase"  # 6-5-1
+    END_OF_BATTLE = "End of Battle"        # 7-1-5-2: "at the end of the/this battle"
     # Engine events with no printed keyword (fired for every card on the field):
     ATTACK_DECLARED = "Attack Declared"   # after [When Attacking] / [On Your Opponent's Attack]
     DON_RETURNED = "DON!! Returned"       # after a DON!! -X cost returned DON!! to the DON!! deck
@@ -42,8 +45,11 @@ BANISH = "Banish"
 BLOCKER = "Blocker"
 UNBLOCKABLE = "Unblockable"
 KEYWORDS = frozenset({RUSH, RUSH_CHARACTER, DOUBLE_ATTACK, BANISH, BLOCKER, UNBLOCKABLE})
-# Not a printed keyword: marks "This Character cannot attack." from static effects.
+# Not printed keywords: markers that permanent or temporary effects grant (10-2-1-3).
 CANNOT_ATTACK = "Cannot Attack"
+NO_KO_IN_BATTLE = "Cannot be K.O.'d in battle"
+NO_KO_BY_EFFECTS = "Cannot be K.O.'d by effects"
+NO_KO_BY_OPP_EFFECTS = "Cannot be K.O.'d by your opponent's effects"
 
 COLORS = frozenset({"red", "green", "blue", "purple", "black", "yellow"})
 
@@ -153,6 +159,7 @@ class Card:
         self.d = definition
         self.owner = owner
         self.zone: Optional[str] = None
+        self.face_up = False  # a Life card placed face-up is open information (3-10-2-1)
         self.incarnation = 0
         self.rested = False
         self.don = 0                 # DON!! cards given to this card
@@ -170,6 +177,7 @@ class Card:
 
     def reset(self) -> None:
         self.incarnation += 1
+        self.face_up = False
         self.rested = False
         self.played_turn = -1
         self.mods = []

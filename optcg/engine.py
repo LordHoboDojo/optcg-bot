@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from typing import Iterable, Optional
 
 from .actions import Action, Decision
-from .cards import (BANISH, BLOCKER, CANNOT_ATTACK, DOUBLE_ATTACK, RUSH, RUSH_CHARACTER, UNBLOCKABLE,
+from .cards import (BANISH, BLOCKER, CANNOT_ATTACK, DOUBLE_ATTACK, NO_KO_BY_EFFECTS, NO_KO_BY_OPP_EFFECTS,
+                    NO_KO_IN_BATTLE, RUSH, RUSH_CHARACTER, UNBLOCKABLE,
                     Card, CardDef, Category, Mod, Timing)
 from .deck import Deck
 
@@ -34,6 +35,16 @@ class GameOver(Exception):
 
 class IllegalAction(ValueError):
     pass
+
+
+@dataclass
+class _Pending:
+    """An auto effect waiting to activate."""
+    src: Card
+    idx: int
+    inc: int             # the source's incarnation when it triggered
+    batch: int
+    activated: bool = False  # already activated and paid for ([On K.O.])
 
 
 @dataclass
@@ -87,7 +98,8 @@ class Game:
         self.history: list[tuple[int, Action]] = []
         self.pending: Optional[Decision] = None
         self._in_static_cost = False
-        self._don_returned: set[int] = set()
+        self._queue: list[_Pending] = []
+        self._resolving_batch: Optional[int] = None
 
         for i, deck in enumerate(decks):
             deck.validate()
@@ -251,6 +263,8 @@ class Game:
                 "characters": [field_card(c) for c in ps.characters],
                 "stage": field_card(ps.stage) if ps.stage else None,
                 "hand_size": len(ps.hand), "deck_size": len(ps.deck), "life": len(ps.life),
+                # face-up Life cards are open information; index 0 is the bottom
+                "life_face_up": {i: c.d.id for i, c in enumerate(ps.life) if c.face_up},
                 "trash": [c.d.id for c in ps.trash],
                 "don_deck": ps.don_deck, "don_active": ps.don_active, "don_rested": ps.don_rested,
             }
@@ -278,7 +292,7 @@ class Game:
         return {"deck": ps.deck, "hand": ps.hand, "trash": ps.trash, "life": ps.life,
                 "character": ps.characters}.get(zone)  # type: ignore[arg-type]
 
-    def move(self, card: Card, zone: Optional[str], bottom: bool = False) -> None:
+    def move(self, card: Card, zone: Optional[str], bottom: bool = False, face_up: bool = False) -> None:
         """Move a card to its owner's zone. zone=None puts it in limbo (a [Trigger] resolving)."""
         if card.zone == "leader":
             return  # Leaders never leave the Leader area (3-6-3)
@@ -294,6 +308,7 @@ class Game:
             card.don = 0
         card.reset()
         card.zone = zone
+        card.face_up = face_up and zone == "life"
         if zone == "stage":
             ps.stage = card
         elif zone is not None:
@@ -382,15 +397,42 @@ class Game:
                     return True
         return False
 
-    def remove_from_field(self, card: Card, zone: str, by: Optional[int], bottom: bool = False):
+    def remove_from_field(self, card: Card, zone: str, by: Optional[int], bottom: bool = False,
+                          face_up: bool = False):
         """Move a Character or Stage off the field by an effect of player `by` (not a K.O.).
         Replacement effects may stop it. Returns True if it moved."""
         if card.zone not in ("character", "stage"):
             return False
         if (yield from self._replaced(card, by, ko=False)):
             return False
-        self.move(card, zone, bottom=bottom)
+        self.move(card, zone, bottom=bottom, face_up=face_up)
         return True
+
+    def place_in_order(self, player: int, cards: list[Card], zone: str, bottom: bool = False):
+        """3-1-7: when several cards go to an area at once, their owner picks the order,
+        from the top of the placed group down."""
+        left, order = list(cards), []
+        while len(left) > 1:
+            opts = [Action("select", card=c.uid, label=c.name) for c in left]
+            a = yield from self.choose(player, "order_cards", opts,
+                                       f"Order the cards going to your {zone}: pick the next one from the top")
+            order.append(self.cards[a.card])
+            left.remove(order[-1])
+        order += left
+        if bottom:  # each later card goes under the earlier ones
+            for c in order:
+                self.move(c, zone, bottom=True)
+        else:  # place bottom-most first so the first pick ends up on top
+            for c in reversed(order):
+                self.move(c, zone)
+
+    def concede(self, player: int) -> None:
+        """1-2-3: a player may concede at any time and loses immediately."""
+        if self.over:
+            raise IllegalAction("the game is over")
+        self._gen.close()
+        self.winner, self.over, self.pending = 1 - player, True, None
+        self._log(f"Player {player} concedes. Game over: player {1 - player} wins")
 
     def rest_your_cards(self, player: int, n: int):
         """Cost "rest N of your cards": any active Leader, Character, Stage or DON!!."""
@@ -415,10 +457,21 @@ class Game:
     def forbid_character_play(self, player: int) -> None:
         self.players[player].no_character_play_turn = self.turn_number
 
-    def ko(self, card: Card, by: Optional[int] = None, replaceable: bool = True):
-        """K.O. a Character (10-2-1); `by` is the player whose effect does it (None in battle).
+    def _ko_prevented(self, card: Card, by: Optional[int], in_battle: bool) -> bool:
+        """10-2-1-3: "cannot be K.O.'d" applies only to K.O.s by battle or by effects."""
+        if in_battle:
+            return self.has_keyword(card, NO_KO_IN_BATTLE)
+        if self.has_keyword(card, NO_KO_BY_EFFECTS):
+            return True
+        return by == 1 - card.owner and self.has_keyword(card, NO_KO_BY_OPP_EFFECTS)
+
+    def ko(self, card: Card, by: Optional[int] = None, replaceable: bool = True, in_battle: bool = False):
+        """K.O. a Character (10-2-1), by battle or by an effect of player `by`.
         [On K.O.] effects activate on the field and resolve from the trash (10-2-17)."""
         if card.zone != "character":
+            return
+        if self._ko_prevented(card, by, in_battle):
+            self._log(f"{card.name} cannot be K.O.'d")
             return
         if replaceable and (yield from self._replaced(card, by, ko=True)):
             return
@@ -429,12 +482,11 @@ class Game:
             eff = card.d.effects[i]
             if eff.optional and not (yield from self.confirm(card.owner, f"Activate {card.name}: {eff.text}?")):
                 continue
-            if self._pay_costs(card, i):
+            if (yield from self._pay_costs(card, i)):
                 paid.append(i)
         self.move(card, "trash")
-        for i in paid:
-            yield from self._resolve(card, i)
-        yield from self._flush_don_returned()
+        for i in paid:  # resolved from the trash, in turn order with other triggered effects
+            self._queue.append(_Pending(card, i, card.incarnation, self._next_batch(), activated=True))
 
     def play_card(self, card: Card, rested: bool = False):
         """Play a Character or Stage without paying its cost (e.g. from an effect)."""
@@ -497,37 +549,45 @@ class Game:
             return False
         return True
 
-    def _pay_costs(self, src: Card, idx: int) -> bool:
+    def _pay_costs(self, src: Card, idx: int):
+        """Pay an effect's activation cost (8-3). Returns True if paid."""
         eff = src.d.effects[idx]
         ps = self.players[src.owner]
         if not self.can_activate(src, idx):
             return False
+        if eff.once_per_turn:
+            src.opt_used[eff.opt_group or idx] = self.turn_number
         if eff.rest_self:
             src.rested = True
         if eff.rest_don:
             ps.don_active -= eff.rest_don
             ps.don_rested += eff.rest_don
         if eff.don_minus:
-            self._return_don(src.owner, eff.don_minus)
-            self._don_returned.add(src.owner)
-        if eff.once_per_turn:
-            src.opt_used[eff.opt_group or idx] = self.turn_number
+            yield from self.return_don(src.owner, eff.don_minus)
         return True
 
-    def _return_don(self, player: int, n: int) -> None:
-        """DON!! -X: return DON!! to the DON!! deck. Takes rested, then active, then given
-        DON!! (the rules let the player choose; this picks the least costly order)."""
+    def return_don(self, player: int, n: int):
+        """DON!! -X (8-3-1-6, 10-2-10): the player picks X DON!! from their cost area, Leader and
+        Characters and returns them to the DON!! deck."""
         ps = self.players[player]
-        for attr in ("don_rested", "don_active"):
-            k = min(n, getattr(ps, attr))
-            setattr(ps, attr, getattr(ps, attr) - k)
-            ps.don_deck += k
-            n -= k
-        for c in reversed(ps.field):
-            k = min(n, c.don)
-            c.don -= k
-            ps.don_deck += k
-            n -= k
+        for _ in range(n):
+            opts = []
+            if ps.don_rested:
+                opts.append(Action("select", index=0, label="Rested DON!! in your cost area"))
+            if ps.don_active:
+                opts.append(Action("select", index=1, label="Active DON!! in your cost area"))
+            opts += [Action("select", card=c.uid, label=f"DON!! given to {c.name}") for c in ps.field if c.don]
+            if not opts:
+                break
+            a = yield from self.choose(player, "return_don", opts, "Return 1 DON!! to your DON!! deck")
+            if a.card is not None:
+                self.cards[a.card].don -= 1
+            elif a.index == 0:
+                ps.don_rested -= 1
+            else:
+                ps.don_active -= 1
+            ps.don_deck += 1
+        self.fire(Timing.DON_RETURNED, ps.field)
 
     def _resolve(self, src: Card, idx: int):
         eff = src.d.effects[idx]
@@ -538,28 +598,59 @@ class Game:
             yield from result
 
     def activate(self, src: Card, idx: int):
-        if self._pay_costs(src, idx):
+        if (yield from self._pay_costs(src, idx)):
             yield from self._resolve(src, idx)
-            yield from self._flush_don_returned()
 
-    def _flush_don_returned(self):
-        """Fire "when a DON!! card on your field is returned" after the effect that paid DON!! -X (8-6-3)."""
-        while self._don_returned:
-            p = self._don_returned.pop()
-            yield from self.fire(Timing.DON_RETURNED, self.players[p].field)
+    # Triggered (auto) effects don't resolve on the spot. fire() queues them and the game
+    # resolves the queue at the next safe point (8-6):
+    #   - effects triggered together form a batch; the turn player resolves theirs first, choosing
+    #     the order, then the non-turn player (8-6-1);
+    #   - effects triggered while a batch resolves wait for the next batch, so they go after the
+    #     rest of the current batch (8-6-1-1) and after the effect that caused them (8-6-3);
+    #   - effects triggered during damage processing wait until it is over (8-6-2).
 
-    def fire(self, timing: Timing, sources: Iterable[Card]):
-        """Activate auto effects with this timing. Pass the turn player's cards first (8-6-1)."""
-        queued = [(src, src.incarnation, i) for src in sources for i in src.d.effect_indexes(timing)]
-        for src, inc, i in queued:
-            if src.incarnation != inc:  # moved before activating (8-1-3-1-3)
-                continue
-            if not self.can_activate(src, i):
-                continue
-            eff = src.d.effects[i]
-            if eff.optional and not (yield from self.confirm(src.owner, f"Activate {src.name}: {eff.text}?")):
-                continue
-            yield from self.activate(src, i)
+    def _next_batch(self) -> int:
+        return 0 if self._resolving_batch is None else self._resolving_batch + 1
+
+    def fire(self, timing: Timing, sources: Iterable[Card]) -> None:
+        """Queue every auto effect with this timing on these cards whose conditions are met now."""
+        for src in sources:
+            for i in src.d.effect_indexes(timing):
+                if self.can_activate(src, i):
+                    self._queue.append(_Pending(src, i, src.incarnation, self._next_batch()))
+
+    def resolve_triggers(self):
+        """Resolve queued auto effects until none are left."""
+        while self._queue:
+            batch = min(q.batch for q in self._queue)
+            tp = self.turn_player
+            mine = [q for q in self._queue if q.batch == batch and q.src.owner == tp] or \
+                [q for q in self._queue if q.batch == batch]
+            q = mine[0]
+            if len(mine) > 1:
+                opts = [Action("select", card=x.src.uid, index=x.idx,
+                               label=f"{x.src.name}: {x.src.d.effects[x.idx].text}") for x in mine]
+                a = yield from self.choose(q.src.owner, "order", opts, "Choose which effect resolves next")
+                q = next(x for x in mine if x.src.uid == a.card and x.idx == a.index)
+            self._queue.remove(q)
+            outer, self._resolving_batch = self._resolving_batch, batch
+            try:
+                yield from self._activate_pending(q)
+            finally:
+                self._resolving_batch = outer
+
+    def _activate_pending(self, q: "_Pending"):
+        src, eff = q.src, q.src.d.effects[q.idx]
+        if q.activated:  # [On K.O.]: activated on the field, resolves from the trash (10-2-17)
+            yield from self._resolve(src, q.idx)
+            return
+        if src.incarnation != q.inc:  # the card moved before its effect activated (8-1-3-1-3)
+            return
+        if not self.can_activate(src, q.idx):
+            return
+        if eff.optional and not (yield from self.confirm(src.owner, f"Activate {src.name}: {eff.text}?")):
+            return
+        yield from self.activate(src, q.idx)
 
     def _ordered_field(self) -> list[Card]:
         tp = self.turn_player
@@ -600,7 +691,8 @@ class Game:
 
         # 5-2-1-5-1: the player who chose resolves "at the start of the game" first.
         for p in (chooser, 1 - chooser):
-            yield from self.fire(Timing.START_OF_GAME, [self.players[p].leader])
+            self.fire(Timing.START_OF_GAME, [self.players[p].leader])
+            yield from self.resolve_triggers()
             self.rng.shuffle(self.players[p].deck)
 
         for p in order:
@@ -629,6 +721,8 @@ class Game:
         # Refresh Phase (6-2)
         self.phase = "refresh"
         self._expire("next_turn", p)
+        self.fire(Timing.START_OF_TURN, self._ordered_field())  # 6-2-2
+        yield from self.resolve_triggers()
         for c in ps.field:
             ps.don_rested += c.don
             c.don = 0
@@ -651,17 +745,22 @@ class Game:
 
         # Main Phase (6-5)
         self.phase = "main"
+        self.fire(Timing.START_OF_MAIN, self._ordered_field())  # 6-5-1
+        yield from self.resolve_triggers()
         while True:
             a = yield from self.choose(p, "main", self._main_options(p), "Main Phase")
             if a.kind == "end":
                 break
             yield from self._do_main_action(p, a)
+            yield from self.resolve_triggers()
             self._check_rules()
 
         # End Phase (6-6)
         self.phase = "end"
-        yield from self.fire(Timing.END_OF_YOUR_TURN, ps.field)
-        yield from self.fire(Timing.END_OF_OPP_TURN, self.players[1 - p].field)
+        self.fire(Timing.END_OF_YOUR_TURN, ps.field)  # 6-6-1-1-2: all of these first
+        yield from self.resolve_triggers()
+        self.fire(Timing.END_OF_OPP_TURN, self.players[1 - p].field)
+        yield from self.resolve_triggers()
         self._expire("turn")
         self._expire("next_end", 1 - p)  # "until the end of your opponent's next End Phase"
         self._check_rules()
@@ -755,7 +854,7 @@ class Game:
         card.rested = rested
         card.played_turn = self.turn_number
         self._log(f"Player {card.owner} plays {card.name}")
-        yield from self.fire(Timing.ON_PLAY, [card])
+        self.fire(Timing.ON_PLAY, [card])
 
     def _play_stage(self, card: Card):
         ps = self.players[card.owner]
@@ -764,7 +863,8 @@ class Game:
         self.move(card, "stage")
         card.played_turn = self.turn_number
         self._log(f"Player {card.owner} plays {card.name}")
-        yield from self.fire(Timing.ON_PLAY, [card])
+        self.fire(Timing.ON_PLAY, [card])
+        yield from ()
 
     # ------------------------------------------------------------ battle (7)
 
@@ -772,82 +872,95 @@ class Game:
         return b.attacker.incarnation != b.attacker_inc or b.target.incarnation != b.target_inc
 
     def _battle(self, attacker: Card, target: Card):
-        p = attacker.owner
-        o = 1 - p
-        opp = self.players[o]
         b = Battle(attacker, target, attacker.incarnation, target.incarnation)
         self.battle = b
         try:
-            # Attack Step
-            self.phase = "attack"
-            attacker.rested = True
-            self._log(f"{attacker.name} ({self.power(attacker)}) attacks {self.describe(target)}")
-            yield from self.fire(Timing.WHEN_ATTACKING, [attacker])
-            yield from self.fire(Timing.ON_OPP_ATTACK, opp.field)
-            yield from self.fire(Timing.ATTACK_DECLARED, self._ordered_field())
-            if self._battle_interrupted(b):
-                return
-
-            # Block Step
-            self.phase = "block"
-            if not self.has_keyword(attacker, UNBLOCKABLE):
-                blockers = [c for c in opp.characters
-                            if c is not b.target and not c.rested and self.has_keyword(c, BLOCKER)]
-                if blockers:
-                    opts = [Action("pass", label="Don't block")] + [
-                        Action("block", card=c.uid, label=f"Block with {self.describe(c)}") for c in blockers]
-                    a = yield from self.choose(o, "block", opts,
-                                               f"{attacker.name} ({self.power(attacker)}) attacks {self.describe(b.target)}")
-                    if a.kind == "block":
-                        blocker = self.cards[a.card]
-                        blocker.rested = True
-                        b.target, b.target_inc = blocker, blocker.incarnation
-                        self._log(f"{blocker.name} blocks")
-                        yield from self.fire(Timing.ON_BLOCK, [blocker])
-            if self._battle_interrupted(b):
-                return
-
-            # Counter Step
-            self.phase = "counter"
-            while True:
-                opts = [Action("pass", label="No more counters")]
-                for c in opp.hand:
-                    if c.category == Category.CHARACTER and self.counter_value(c) > 0:
-                        opts.append(Action("counter", card=c.uid, target=b.target.uid,
-                                           label=f"Counter +{self.counter_value(c)} with {c.name}"))
-                    elif c.category == Category.EVENT and self.cost(c) <= opp.don_active:
-                        idx = c.d.effect_indexes(Timing.COUNTER)
-                        if idx and self.can_activate(c, idx[0]):
-                            opts.append(Action("event", card=c.uid, label=f"Activate {self.describe(c)}"))
-                a = yield from self.choose(o, "counter", opts,
-                                           f"{attacker.name} ({self.power(attacker)}) vs {self.describe(b.target)}")
-                if a.kind == "pass":
-                    break
-                card = self.cards[a.card]
-                if a.kind == "counter":
-                    value = self.counter_value(card)
-                    self.move(card, "trash")
-                    self.add_power(b.target, value, "battle", by=o)
-                    self._log(f"Player {o} counters +{value} with {card.name}")
-                else:
-                    self._pay_card_cost(card)
-                    yield from self._activate_event(card, Timing.COUNTER)
-                if self._battle_interrupted(b):
-                    return
-
-            # Damage Step
-            self.phase = "damage"
-            atk_power, tgt_power = self.power(attacker), self.power(b.target)
-            if atk_power >= tgt_power:
-                if b.target.category == Category.LEADER:
-                    dmg = 2 if self.has_keyword(attacker, DOUBLE_ATTACK) else 1
-                    yield from self.deal_damage(o, dmg, banish=self.has_keyword(attacker, BANISH))
-                else:
-                    yield from self.ko(b.target, by=None)
-            else:
-                self._log(f"Attack fails ({atk_power} < {tgt_power})")
+            yield from self._battle_steps(b)
+            # End of the Battle (7-1-5), also reached when a step was cut short
+            self.phase = "end_of_battle"
+            self.fire(Timing.END_OF_BATTLE, self._ordered_field())
+            yield from self.resolve_triggers()
         finally:
-            # End of the Battle (7-1-5)
             self._expire("battle")
             self.battle = None
             self.phase = "main"
+
+    def _battle_steps(self, b: Battle):
+        attacker = b.attacker
+        o = 1 - attacker.owner
+        opp = self.players[o]
+        # Attack Step
+        self.phase = "attack"
+        attacker.rested = True
+        self._log(f"{attacker.name} ({self.power(attacker)}) attacks {self.describe(b.target)}")
+        self.fire(Timing.WHEN_ATTACKING, [attacker])
+        self.fire(Timing.ON_OPP_ATTACK, opp.field)  # 10-2-16-1: after [When Attacking]
+        self.fire(Timing.ATTACK_DECLARED, self._ordered_field())
+        yield from self.resolve_triggers()
+        if self._battle_interrupted(b):  # 7-1-1-4
+            return
+
+        # Block Step
+        self.phase = "block"
+        if not self.has_keyword(attacker, UNBLOCKABLE):
+            blockers = [c for c in opp.characters
+                        if c is not b.target and not c.rested and self.has_keyword(c, BLOCKER)]
+            if blockers:
+                opts = [Action("pass", label="Don't block")] + [
+                    Action("block", card=c.uid, label=f"Block with {self.describe(c)}") for c in blockers]
+                a = yield from self.choose(o, "block", opts,
+                                           f"{attacker.name} ({self.power(attacker)}) attacks {self.describe(b.target)}")
+                if a.kind == "block":
+                    blocker = self.cards[a.card]
+                    blocker.rested = True
+                    b.target, b.target_inc = blocker, blocker.incarnation
+                    self._log(f"{blocker.name} blocks")
+                    self.fire(Timing.ON_BLOCK, [blocker])
+                    yield from self.resolve_triggers()
+        if self._battle_interrupted(b):  # 7-1-2-3
+            return
+
+        # Counter Step
+        self.phase = "counter"
+        while True:
+            opts = [Action("pass", label="No more counters")]
+            for c in opp.hand:
+                if c.category == Category.CHARACTER and self.counter_value(c) > 0:
+                    # 7-1-3-1-1: boost the Leader or any 1 Character, the battling card first
+                    targets = [b.target] + [t for t in self.leader_and_characters(o) if t is not b.target]
+                    opts += [Action("counter", card=c.uid, target=t.uid,
+                                    label=f"Counter +{self.counter_value(c)} on {t.name} with {c.name}")
+                             for t in targets]
+                elif c.category == Category.EVENT and self.cost(c) <= opp.don_active:
+                    idx = c.d.effect_indexes(Timing.COUNTER)
+                    if idx and self.can_activate(c, idx[0]):
+                        opts.append(Action("event", card=c.uid, label=f"Activate {self.describe(c)}"))
+            a = yield from self.choose(o, "counter", opts,
+                                       f"{attacker.name} ({self.power(attacker)}) vs {self.describe(b.target)}")
+            if a.kind == "pass":
+                break
+            card = self.cards[a.card]
+            if a.kind == "counter":
+                value, boosted = self.counter_value(card), self.cards[a.target]
+                self.move(card, "trash")
+                self.add_power(boosted, value, "battle", by=o)
+                self._log(f"Player {o} counters +{value} on {boosted.name} with {card.name}")
+            else:
+                self._pay_card_cost(card)
+                yield from self._activate_event(card, Timing.COUNTER)
+            yield from self.resolve_triggers()
+            if self._battle_interrupted(b):  # 7-1-3-1-3
+                return
+
+        # Damage Step
+        self.phase = "damage"
+        atk_power, tgt_power = self.power(attacker), self.power(b.target)
+        if atk_power >= tgt_power:
+            if b.target.category == Category.LEADER:
+                dmg = 2 if self.has_keyword(attacker, DOUBLE_ATTACK) else 1
+                yield from self.deal_damage(o, dmg, banish=self.has_keyword(attacker, BANISH))
+            else:
+                yield from self.ko(b.target, by=None, in_battle=True)
+        else:
+            self._log(f"Attack fails ({atk_power} < {tgt_power})")
+        yield from self.resolve_triggers()  # 8-6-2: after all damage processing

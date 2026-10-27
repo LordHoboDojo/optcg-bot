@@ -117,7 +117,7 @@ class GreedyAgent(Agent):
         life = len(g.players[d.player].life)
         worth_it = b.target.category == Category.CHARACTER and g.cost(b.target) >= 4 or \
             b.target.category == Category.LEADER and life <= 3
-        counters = [o for o in d.options if o.kind == "counter"]
+        counters = [o for o in d.options if o.kind == "counter" and o.target == b.target.uid]
         total = sum(g.counter_value(g.cards[o.card]) for o in counters)
         if not worth_it or total < need:
             return _find(d, "pass")

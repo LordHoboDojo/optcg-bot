@@ -14,7 +14,11 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from .actions import Action
-from .cards import CANNOT_ATTACK, KEYWORDS, UNBLOCKABLE, Category, Effect, Timing
+from .cards import (CANNOT_ATTACK, KEYWORDS, NO_KO_BY_EFFECTS, NO_KO_BY_OPP_EFFECTS, NO_KO_IN_BATTLE,
+                    UNBLOCKABLE, Category, Effect, Timing)
+
+NO_KO = {"in battle": NO_KO_IN_BATTLE, "by effects": NO_KO_BY_EFFECTS,
+         "by your opponent's effects": NO_KO_BY_OPP_EFFECTS}
 
 
 class Unsupported(Exception):
@@ -118,6 +122,7 @@ COST_PARTS = [
     (r"(?:You may )?trash (\d+) (.+?) from your hand\s*", "trash"),
     (r"(?:You may )?add (\d+) cards? from the top of your Life cards to your hand\s*", "life"),
     (r"(?:You may )?rest (\d+) of your cards\s*", "rest_cards"),
+    (r"(?:You may )?turn (\d+) cards? from the top of your Life cards face-up\s*", "life_face_up"),
     (r"(?:You may )?reveal (\d+) (.+?) from your hand\s*", "reveal"),
     (r"(?:and|,)\s*", None),
 ]
@@ -132,7 +137,7 @@ def _parse_costs(prefix: str) -> dict:
                 if kind == "rest_don":
                     g1 = cm.group(1)
                     costs[kind] = CIRCLED[g1] if g1 in CIRCLED else int(g1)
-                elif kind in ("don_minus", "life", "rest_cards"):
+                elif kind in ("don_minus", "life", "rest_cards", "life_face_up"):
                     costs[kind] = int(cm.group(1))
                 elif kind in ("trash", "reveal"):
                     costs[kind] = (int(cm.group(1)), parse_filter(cm.group(2)))
@@ -221,6 +226,7 @@ def _wrap_costs(action, costs: dict, ask: bool):
     reveal_n, reveal_pred = costs.get("reveal", (0, None))
     life_n = costs.get("life", 0)
     rest_n = costs.get("rest_cards", 0)
+    flip_n = costs.get("life_face_up", 0)
     trash_self = costs.get("trash_self", False)
 
     def payable(g, src):
@@ -232,6 +238,9 @@ def _wrap_costs(action, costs: dict, ask: bool):
         if life_n and len(ps.life) < life_n:
             return False
         if rest_n and g.active_card_count(src.owner) < rest_n:
+            return False
+        # turning cards face-up that already are does nothing, so it can't pay the cost (1-3-2-1)
+        if flip_n and (len(ps.life) < flip_n or any(c.face_up for c in ps.life[-flip_n:])):
             return False
         if trash_self and src.zone not in ("character", "stage"):
             return False
@@ -253,6 +262,8 @@ def _wrap_costs(action, costs: dict, ask: bool):
             g._log(f"Player {src.owner} reveals {', '.join(c.name for c in shown)}")
         if rest_n:
             yield from g.rest_your_cards(src.owner, rest_n)
+        for c in ps.life[-flip_n:] if flip_n else ():
+            c.face_up = True
         if life_n:
             for _ in range(life_n):
                 g.move(ps.life[-1], "hand")
@@ -263,8 +274,8 @@ def _wrap_costs(action, costs: dict, ask: bool):
 
 
 STATIC_TARGETS = [
-    (r"This (?:Character|Leader|card) gains ", lambda m: _self),
-    (r"All of your (?:(?P<types>\{[^}]+\}) type )?Characters(?: with a cost of (?P<c>\d+) or more)? gains? ",
+    (r"This (?:Character|Leader|card) ", lambda m: _self),
+    (r"All of your (?:(?P<types>\{[^}]+\}) type )?Characters(?: with a cost of (?P<c>\d+) or more)? ",
      lambda m: lambda g, src, card: card.owner == src.owner and card.zone == "character"
      and (not m["types"] or m["types"][1:-1] in card.d.types)
      and (m["c"] is None or g.cost(card) >= int(m["c"]))),
@@ -297,8 +308,16 @@ def _compile_static(body: str, spec: dict, out: Compiled) -> None:
             break
     else:
         raise Unsupported
-    # rest is e.g. "+3000 power.", "[Blocker].", "[Blocker] and +3000 power.", "+12 cost."
-    parts = re.fullmatch(r"(?:\[(?P<kw>[^\]]+)\])?(?: and )?(?:\+(?P<v>\d+) (?P<what>power|cost))?\.", rest)
+    if km := re.fullmatch(r"cannot be K\.O\.'d (?P<how>in battle|by effects|by your opponent's effects)"
+                          r"(?: and gains \[(?P<kw>[^\]]+)\])?\.", rest):
+        if km["kw"] and km["kw"] not in KEYWORDS:
+            raise Unsupported
+        out.static_keywords.append((cond, NO_KO[km["how"]], to))
+        if km["kw"]:
+            out.static_keywords.append((cond, km["kw"], to))
+        return
+    # rest is e.g. "gains +3000 power.", "gains [Blocker] and +3000 power.", "gain +12 cost."
+    parts = re.fullmatch(r"gains? (?:\[(?P<kw>[^\]]+)\])?(?: and )?(?:\+(?P<v>\d+) (?P<what>power|cost))?\.", rest)
     if not parts or not (parts["kw"] or parts["v"]):
         raise Unsupported
     if parts["kw"]:
@@ -381,6 +400,8 @@ COND_PARTS = [
      lambda m: lambda g, src: sum(1 for c in g.characters(src.owner) if c.d.trigger_text) >= int(m.group(1))),
     (r"this Character was played on this turn",
      lambda m: lambda g, src: src.played_turn == g.turn_number),
+    (r"you have a face-up Life card",
+     lambda m: lambda g, src: any(c.face_up for c in g.players[src.owner].life)),
 ]
 
 
@@ -719,8 +740,8 @@ def t_opp_bottoms(m):
 
     def run(g, src):
         o = 1 - src.owner
-        for c in (yield from g.choose_cards(o, g.players[o].hand, n, "Place on the bottom of your deck", exactly=True)):
-            g.move(c, "deck", bottom=True)
+        chosen = yield from g.choose_cards(o, g.players[o].hand, n, "Place on the bottom of your deck", exactly=True)
+        yield from g.place_in_order(o, chosen, "deck", bottom=True)
     return run
 
 
@@ -918,9 +939,12 @@ def t_look(m):
         picks = yield from g.choose_cards(src.owner, [c for c in top if pred(c)], k, "Add to hand")
         for c in picks:
             g.move(c, "hand")
-        for c in top:
-            if c not in picks:
-                g.move(c, "trash" if to_trash else "deck", bottom=not to_trash)
+        rest = [c for c in top if c not in picks]
+        if to_trash:
+            for c in rest:
+                g.move(c, "trash")
+        else:
+            yield from g.place_in_order(src.owner, rest, "deck", bottom=True)
     return run
 
 
@@ -945,6 +969,29 @@ def t_play_from(m):
         cands = [c for c in pool if c.category in (Category.CHARACTER, Category.STAGE) and pred(c)]
         for c in (yield from g.choose_cards(src.owner, cands, n, "Play a card")):
             yield from g.play_card(c, rested=rested)
+    return run
+
+
+def t_char_to_life(m):
+    """A Character goes from the field to the top or bottom of its owner's Life face-up."""
+    n, opp_only, cost = int(m["n"]), bool(m["opp"]), int(m["cost"])
+
+    def run(g, src):
+        sides = [1 - src.owner] if opp_only else [1 - src.owner, src.owner]
+        cands = [c for p in sides for c in g.characters(p) if g.cost(c) <= cost]
+        for c in (yield from g.choose_cards(src.owner, cands, n, "Add to Life face-up")):
+            bottom = yield from g.confirm(src.owner, f"Put {c.name} at the bottom of the Life cards?")
+            yield from g.remove_from_field(c, "life", by=src.owner, bottom=bottom, face_up=True)
+    return run
+
+
+def t_hand_to_life(m):
+    n, pred = int(m["n"]), parse_filter(m["f"])
+
+    def run(g, src):
+        hand = g.players[src.owner].hand
+        for c in (yield from g.choose_cards(src.owner, [c for c in hand if pred(c)], n, "Add to Life face-up")):
+            g.move(c, "life", face_up=True)
     return run
 
 
@@ -1016,4 +1063,7 @@ TEMPLATES: list[tuple[str, Callable]] = [
     (r"Play up to (?P<n>\d+) (?P<f>[^.]+?) from your (?P<zone>hand or trash|hand|trash)(?P<rested> rested)?\.",
      t_play_from),
     (r"Add up to (?P<n>\d+) (?P<f>[^.]+?) from your trash to your hand\.", t_trash_to_hand),
+    (r"(?:Add|Place) up to (?P<n>\d+) (?P<opp>of your opponent's )?Characters? with a cost of (?P<cost>\d+) or less "
+     r"(?:to|at) the top or bottom of (?:the owner's|your opponent's|their) Life cards face-up\.", t_char_to_life),
+    (r"Add up to (?P<n>\d+) (?P<f>[^.]+?) from your hand to the top of your Life cards face-up\.", t_hand_to_life),
 ]

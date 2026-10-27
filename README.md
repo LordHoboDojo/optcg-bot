@@ -85,9 +85,14 @@ and whether it's optional.
 
 ## Known simplifications
 
-- When several auto effects trigger together, they resolve turn player first (8-6-1), but each player's own effects resolve in field order instead of the order they choose.
-- Counter cards can only boost the card under attack, not another Leader or Character.
-- DON!! −X chooses which DON!! to return automatically: rested first, then active, then given.
 - Replacement effects ("instead") work only for a card leaving the field or being K.O.'d (`CardDef.replacements`), and the first one the owner accepts is used.
-- Not modelled yet: start-of-turn and start-of-Main-Phase triggers, end-of-battle triggers, "cannot be K.O.'d" style protections, and face-up Life cards.
+- Infinite loops (11-1) aren't detected; `play_game` gives up after 20,000 decisions.
+- Card text using the new timings (start of turn, start of Main Phase, end of battle) isn't compiled yet; only scripts can use them. Each appears on about one card.
 - No fast state cloning for search bots yet. Replaying `g.history` with the same seed rebuilds a game.
+
+## Effect order
+
+Auto effects queue when they trigger and resolve at the next safe point (8-6): effects that
+trigger together resolve turn player first, each player choosing the order of their own
+(an `order` decision). Effects that trigger while others resolve wait for the current batch
+(8-6-1-1, 8-6-3), and effects triggered during damage wait until it is over (8-6-2).

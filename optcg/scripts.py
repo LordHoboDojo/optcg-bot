@@ -114,7 +114,7 @@ def _hand_at_least(n):
 @script("OP17-015", covers="would be removed")
 def marco():
     def pay(g, src, card):
-        yield from g.ko(src, by=None, replaceable=False)
+        yield from g.ko(src, by=src.owner, replaceable=False)
     return {"replacements": (Replacement(_by_opponent(), pay, lambda g, src: src.zone == "character",
                                          "K.O. Marco"),)}
 
@@ -157,8 +157,8 @@ def kyo():
 def zoro():
     def pay(g, src, card):
         trash = g.players[src.owner].trash
-        for c in (yield from g.choose_cards(src.owner, trash, 3, "Place on the bottom of your deck", exactly=True)):
-            g.move(c, "deck", bottom=True)
+        chosen = yield from g.choose_cards(src.owner, trash, 3, "Place on the bottom of your deck", exactly=True)
+        yield from g.place_in_order(src.owner, chosen, "deck", bottom=True)
     return {"replacements": (Replacement(_by_opponent(), pay, lambda g, src: len(g.players[src.owner].trash) >= 3,
                                          "Place 3 cards from your trash at the bottom of your deck"),)}
 
