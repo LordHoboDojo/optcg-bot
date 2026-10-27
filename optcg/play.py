@@ -34,6 +34,25 @@ def play_game(decks: tuple[Deck, Deck], agents: tuple[Agent, Agent], seed=None) 
     raise RuntimeError(f"game did not finish in {MAX_STEPS} steps")
 
 
+def play_human(decks: tuple[Deck, Deck], seat: int, bot: Agent, seed=None, human=None) -> Game:
+    from .human import HELP, Concede, HumanAgent
+    human = human or HumanAgent()
+    agents = [bot, bot]
+    agents[seat] = human
+    human.out(f"You are player {seat} ({decks[seat].leader.name}) against the bot ({decks[1 - seat].leader.name}).")
+    human.out(HELP)
+    game = Game(decks, seed=seed)
+    try:
+        while not game.over:
+            d = game.pending
+            game.step(agents[d.player].act(game, d))
+    except Concede:
+        game.concede(seat)
+    human.show_new_log(game)
+    human.out("\nYou win!" if game.winner == seat else "\nDraw." if game.winner is None else "\nYou lose.")
+    return game
+
+
 def resolve_deck(spec: str) -> Deck:
     if spec in SAMPLE_DECKS:
         return SAMPLE_DECKS[spec]
@@ -71,8 +90,9 @@ def main(argv=None) -> None:
     ap.add_argument("--p1", choices=AGENTS, default="random", help="bot for player 1")
     ap.add_argument("--deck0", default="sample-red")
     ap.add_argument("--deck1", default="sample-green")
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--seed", type=int, default=None, help="random seed (default: 0, or random with --human)")
     ap.add_argument("--log", action="store_true", help="print the game log of every game")
+    ap.add_argument("--human", type=int, choices=(0, 1), help="play this seat yourself against the other bot")
     ap.add_argument("--list-decks", action="store_true", help="list official decks with effect coverage")
     ap.add_argument("--missing", metavar="DECK", help="list a deck's unimplemented effect text")
     args = ap.parse_args(argv)
@@ -83,6 +103,9 @@ def main(argv=None) -> None:
         return show_missing(args.missing)
 
     decks = (resolve_deck(args.deck0), resolve_deck(args.deck1))
+    if args.human is not None:
+        return play_human(decks, args.human, AGENTS[args.p1 if args.human == 0 else args.p0](), args.seed)
+    args.seed = args.seed or 0
     results: Counter = Counter()
     turns = 0
     for i in range(args.games):

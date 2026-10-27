@@ -4,6 +4,8 @@ A ONE PIECE CARD GAME rules engine and bots, written from the official
 Comprehensive Rules v1.2.1 (`rules/`). Pure Python 3.10, no dependencies.
 
 ```bash
+# play Rocks yourself against the Linlin bot (run from this folder)
+python3 -m optcg.play --deck0 "(Blue) Rocks.D.Xebec" --deck1 "(Yellow) Charlotte Linlin" --human 0 --p1 greedy
 python3 -m optcg.play --games 200 --p0 greedy --p1 random   # bot vs bot win rates
 python3 -m optcg.play --games 1 --log                        # print one game's log
 python3 -m unittest discover tests                           # rule tests

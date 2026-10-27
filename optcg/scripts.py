@@ -93,6 +93,27 @@ def xebec_leader():
                                condition=lambda g, src: bool(g.players[src.owner].hand)),)}
 
 
+# ---------------------------------------------------------------- other sets
+
+@script("ST20-003", covers="Look at up to 1 card from the top of your or your opponent's Life")
+def brulee():
+    """[Trigger] Look at the top card of your or your opponent's Life, put it on the top or bottom
+    of those Life cards, then add this card to your hand."""
+    def run(g, src):
+        opts = [Action("pass", label="Don't look")]
+        for p, whose in ((src.owner, "your"), (1 - src.owner, "your opponent's")):
+            if g.players[p].life:
+                opts.append(Action("select", index=p, label=f"Look at the top of {whose} Life cards"))
+        a = yield from g.choose(src.owner, "select", opts, "Charlotte Brulee: look at a Life card?")
+        if a.kind == "select":
+            life = g.players[a.index].life
+            if (yield from g.confirm(src.owner, f"The top card is {life[-1].name}. Move it to the bottom?")):
+                life.insert(0, life.pop())
+        g.move(src, "hand")  # instead of the usual trash after a [Trigger] (10-1-5-3)
+
+    return {"effects": (Effect(Timing.TRIGGER, run, "Look at a top Life card, then add this card to your hand"),)}
+
+
 # ---------------------------------------------------------------- replacement effects
 
 def _by_opponent(type_check=lambda card: True):
