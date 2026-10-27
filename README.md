@@ -50,7 +50,10 @@ used at all.
 | `optcg/effect_text.py` | Compiles printed effect text into engine effects |
 | `optcg/scripts.py` | Hand-written effects for individual real cards |
 | `tools/fetch_cards.py` | Downloads card data and official decklists |
-| `optcg/play.py` | Runs bot-vs-bot games |
+| `optcg/play.py` | Runs bot-vs-bot games and terminal play |
+| `optcg/human.py` | Terminal play against a bot |
+| `optcg/env.py` | Training environment and observation encoding |
+| `tools/bench.py` | Games per second, with and without encoding |
 
 ## Driving the engine
 
@@ -84,6 +87,26 @@ FLAME = CardDef("SMP-R12", "Flame Strike", Category.EVENT, ("red",), cost=3, eff
 `Effect` carries the timing, [Once Per Turn], [DON!! xX], [Your Turn] /
 [Opponent's Turn], costs (rest DON!!, DON!! −X, rest this card), extra conditions,
 and whether it's optional.
+
+## Training a bot
+
+`optcg/env.py` wraps a game for learning: the learner plays one seat and a fixed agent the other.
+
+```python
+env = Env(find_deck("(Blue) Rocks.D.Xebec"), find_deck("(Yellow) Charlotte Linlin"), opponent=GreedyAgent())
+obs = env.reset(seed=0)
+while not env.done:
+    obs, reward, done = env.step(policy(obs))   # an index into obs["options"]
+```
+
+An observation holds only what the learner may see, as plain lists of numbers:
+`scalars` (Life, hand, DON!!, turn, ...), `cards` (one row per visible card, with a card id from
+`card_index()` for an embedding) and `options` (one row per legal option, pointing at the card rows
+of the acting card and its target). Score each option row and pick one; the options change at every
+decision, so there is no fixed action space. Reward is +1 for a win, -1 for a loss, 0 otherwise.
+
+`python3 tools/bench.py` measures speed. On one core the Rocks vs Linlin matchup runs about
+90 games/s bot-vs-bot and 40 games/s through the env with encoding (about 180 decisions a game).
 
 ## Known simplifications
 
