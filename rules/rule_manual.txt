@@ -1,0 +1,641 @@
+Oﬃcial Rule Manual
+  Version 1.11
+  Table of Contents
+
+
+About the Game............................................................................... 01
+Card Information ................................................................. 01~04
+          Leader Cards.............................................................................. 01
+          Character Cards ....................................................................... 02
+          Event Cards ................................................................................ 03
+          Stage Cards ............................................................................... 03
+    DON!! Cards ............................................................................... 04
+Areas ..................................................................................................... 05
+Decks .................................................................................................... 06
+   Setting Up the Game ............................................................... 07
+   Victory Condition ........................................................................ 07
+          ★Active and Rested States ................................................. 08
+          ★Paying Costs .......................................................................... 08
+Game Flow ................................................................................ 09~13
+   Main Phase ................................................................................... 10
+             Play Cards.............................................................................. 10
+             Play Character Cards ........................................................... 10
+             Play Stage Cards .................................................................. 10
+             Activate Event Cards ........................................................... 10
+             Activate Card Eﬀects ...................................................... 11
+             Give DON!! Cards .............................................................. 11
+             Battle................................................................................11~13
+             ① Attack Declaration.......................................................... 11
+     ② Block Step .......................................................................... 11
+     ③ Counter Step ..................................................................... 12
+     ④ Damage Step .................................................................... 12
+     ⑤ End of the Battle .............................................................. 13
+End Phase .......................................................................................... 13
+   Miscellaneous .............................................................................. 14
+Glossary .............................................................................................. 15
+  About the Game
+ONE PIECE Card Game is a trading card game where you battle
+against your opponent!
+Create your own crew centered around a Leader card, and then
+attack your opponentʼ s crew!
+Keep attacking to reduce the opposing Leader cardʼ s Life to 0 and
+deliver a ﬁnishing blow to achieve victory!
+
+
+
+カードについて
+Card Information
+
+                       Leader Cards
+
+
+                      Leader card s back
+
+
+
+
+                                         ● Power ： The Leader s
+                                           attack power.
+                                           During battles, the card with
+                                           the higher power wins.
+
+                                         ● Attribute
+
+                                         ● Eﬀects ： Special abilities
+                                           the Leader possesses.
+
+                                         ● Color
+
+                                         ● Card Category
+
+                                         ● Card Name
+
+                                         ● Life
+
+                                         ● Type ： The Leader s type(s).
+
+
+                                         ● Card Number
+
+                                         ● Rarity
+
+                                         ● Block Symbol
+                                                                           01
+Character Cards
+
+
+Character card, Event card, Stage
+card s back
+
+
+
+
+               ● Cost ： The cost required
+                 to play the Character to your
+                 Character area.
+
+
+               ● Power ： The Character s
+                 attack power. During battles,
+                 the card with the higher
+                 power wins.
+
+               ● Attribute
+
+               ● Counter ： The power
+                 increase that can be
+                 activated during the Counter
+                 Step.
+
+               ● Eﬀects ： Special abilities
+                 the Character possesses.
+
+               ● Trigger Eﬀect ： An
+                 eﬀect that can be activated
+                 when the Leader takes
+                 damage and a card is added
+                 to the hand from the Life
+                 area.
+
+               ● Color
+
+               ● Card Category
+
+               ● Card Name
+
+               ● Type ： The Character s type(s).
+
+
+               ● Card Number
+
+
+               ● Rarity
+
+
+               ● Block Symbol
+
+
+
+                                                   02
+Event Cards
+              ● Cost ： The cost required
+                to activate the Event.
+
+              ● Eﬀects ： Eﬀects played
+                when an Event card is
+                activated.
+
+              ● Trigger Eﬀect ： An
+                eﬀect that can be activated
+                when the Leader takes
+                damage and a card is added
+                to the hand from the Life
+                area.
+
+              ● Color
+
+              ● Card Category
+
+              ● Card Name
+
+              ● Type ： The Event s type(s).
+
+
+              ● Card Number
+
+              ● Rarity
+
+              ● Block Symbol
+
+
+
+Stage Cards
+
+              ● Cost ： The cost required
+                to play the Stage to your
+                Stage area.
+
+              ● Eﬀects ： Special abilities
+                the Stage possesses.
+
+              ● Color
+
+              ● Card Category
+
+              ● Card Name
+
+              ● Type ： The Stage s type(s).
+
+
+              ● Card Number
+
+              ● Rarity
+
+              ● Block Symbol
+
+
+
+                                              03
+ DON!! Cards
+
+
+
+DON!! card   s back
+
+
+
+
+             DON!! cards are used to
+             pay the cost of using a
+             card.
+             You can also give them to
+             Character and Leader
+             cards.
+             Character and Leader
+             cards gain 1000 power
+             during your turn per DON!!
+             card attached to them.
+
+
+
+
+                                          04
+カードについて
+Areas
+    When playing, arrange your cards as shown below.
+
+
+
+
+                                                                            ①
+
+   ⑧
+                                                   ②               ③               ④
+
+
+     ⑦                                      ⑥                                      ⑤
+
+❶ Character area ： Where your Character cards are placed.
+❷ Leader area ： Where your single Leader card is placed.
+                        Your Leader card should remain face-up from the start of the game.
+
+❸ Stage area ： Where your Stage cards are placed. A maximum of 1 card can be placed
+                      at a time.
+❹ Deck ： Where your deck is placed.
+❺ Trash ： Where Character cards that have been K.O. d in battle and Event cards that
+              have been activated are placed.
+
+❻ Cost area ： Where DON!! cards from your DON!! deck are placed.
+❼ DON!! deck ： Where your DON!! deck is placed.
+❽ Life ： Where cards equal to the Life value of your Leader are placed face-down.
+           When your Leader takes damage, the number of cards in your Life area will
+           decrease.
+           If your Leader takes damage when there are 0 cards in your Life area, you will lose
+           the game.
+
+    *The Leader area, Character area, Stage area, and cost
+    area are collectively referred to as the ﬁeld                       .
+                                                                                                 05
+Decks
+           The following are required to play
+                ONE PIECE Card Game.
+
+  Leader Card：1 card.
+  Deck：A deck with a total of 50 cards, made up of Character
+  cards, Event cards, and Stage cards.
+  Your deck can only contain cards of a color included on the
+  Leader card. Cards of a color not included on the Leader
+  card cannot be added to your deck.
+  Your deck can contain no more than 4 cards with the same
+  card number.
+  DON!! Deck：A deck made up of 10 DON!! cards.
+
+
+
+
+     《Leader Card》         《Deck》            《DON!! Deck》
+
+
+
+Play sheets are not required, but it is recommended that
+each player has one.
+
+
+
+
+                                                                06
+Setting Up the Game
+*If there are any discrepancies between this rule manual and the card text,
+the card text should take precedence.
+Complete the steps below in order when setting up the game.
+
+❶ Shuﬄe your deck, then place it in the designated area.
+❷ Place your Leader card in the Leader area face-up.
+❸ Decide who goes ﬁrst with Rock-Paper-Scissors. The winner
+   chooses whether to go ﬁrst or second.
+❹ Draw 5 cards from your deck.
+❺ Each player may choose to return all of the cards in their
+   hand to their deck, reshuﬄe, and redraw 5 cards from their
+   deck. Each player can only do this once.
+  * The player going ﬁrst is also the ﬁrst to decide whether to
+   carry out ❺.
+❻ Draw cards equal to your Leader s Life value from the top of
+   your deck one at a time and place them face-down in your
+   Life area without looking at their contents.
+  (Place the cards such that the card at the top of your deck is
+   at the bottom in your Life area.)
+❼ The player going ﬁrst starts their turn, and the game begins!
+
+
+
+
+Victory Conditions
+You will win if either of the following occurs during the
+game:
+● You win a battle against your opponent s Leader when they
+   have 0 Life cards remaining.
+● The number of cards in your opponent s deck reaches 0.
+* If a deck is reduced to 0 cards, all ongoing eﬀects will be
+canceled, and the player whose deck is reduced to 0 cards will
+lose the game.
+
+                                                                              07
+ ★Active and Rested States
+Character and Stage cards are normally played upright in an
+            .
+After performing an action such as attacking or blocking, they are
+rotated sideways to show they are in a
+
+
+
+
+           《Active》                          《Rested》
+
+Returning a rested card to an active state is called
+      , while changing an active card to a rested state is called
+
+
+
+ ★Paying Costs
+In this card game, when you play a Character or Stage card, or
+activate an Event card, you will need to pay its cost by resting the
+speciﬁed number of active DON!! cards in your cost area.
+
+
+
+
+                                                                       08
+             なが
+
+
+
+Game Flow
+    The game proceeds according to the ﬂowchart below.
+
+
+① Refresh Phase             Set all of your rested cards as active, and
+                            return all DON!! cards attached to cards
+                            to your cost area in an active state.
+
+
+② Draw Phase                Draw 1 card from your deck and add it to
+                            your hand.
+                            (The player going ﬁrst does not draw a
+                            card on their ﬁrst turn.)
+
+
+③ DON!! Phase               Place 2 DON!! cards from your DON!! deck
+                            in your cost area and set them as active. If
+                            you only have 1 card in your DON!! deck,
+                            then place 1 DON!! card in your cost area
+                            and set it as active.
+                            The player going ﬁrst can only place 1
+                            DON!! card in their cost area and set it as
+                            active on their ﬁrst turn.
+
+
+④ Main Phase                This is the primary phase of the game.
+                            You may perform actions A to D in any
+                            order and as many times as you wish
+                            when possible.
+                                 Play Cards
+                                  ● Play Character Cards
+
+                                  ● Play Stage Cards
+
+                                  ● Activate Event Cards
+
+                                 Activate Card Eﬀects
+                                 Give DON!! Cards
+                                 Battle
+
+                            * The game proceeds to ⑤ End Phase when
+                            you declare the end of your Main Phase.
+
+
+⑤ End Phase                 “End of Your Turn” and similar eﬀects
+                            activate and are resolved.
+                            Then, your turn ends and it becomes your
+                            opponentʼ s turn.
+
+                                                                           09
+                         Main Phase
+
+             Play Cards
+  Play Character Cards
+Players can play Character cards from their
+hand to their Character area.
+First, place the Character card you want to play
+in your Character area and set it as active.
+Next, pay the cost of that Character card. The
+Character is now played in your Character area.
+If you have 5 Characters on your field and want
+to play a new Character card, you can do so by
+trashing one of the Characters already on your
+field.
+
+  Play Stage Cards
+Players can play Stage cards from their hand to
+their Stage area.
+First, place the Stage card you want to play in
+your Stage area and set it as active.
+Next, pay the cost of that Stage card. The Stage
+is now played in your Stage area.
+If you have a Stage card on your field and want
+to play a new Stage card, you can do so by
+trashing the Stage card already on your field.
+
+  Activate Event Cards
+To activate an Event card from your hand, first reveal the Event
+card you wish to activate from your hand. Pay the activation
+cost and the Event card s Main effect will be activated. Then,
+place the Event card in your trash.
+         effects cannot be activated from your hand.
+
+
+
+
+                                                                   10
+                 Main Phase              ,     ,     -1
+
+    Activate Card Eﬀects
+Players can activate the effects of Leader, Character,
+Event, and Stage cards.
+
+    Give DON!! Cards
+Players can give 1 active DON!! card from their cost area to one
+of their Leader or Character cards by placing it under that card.
+The DON!! card must remain visible. This is referred to as
+giving a DON!! card.
+Leader and Character cards gain 1000 power during your turn
+for each DON!! card you have attached to them.
+As long as you have DON!! cards to give, there is no limit to the
+number of times you can give DON!! cards.
+
+              Battle
+                 Battles proceed according to the following flowchart.
+Battle Flow
+                 (Neither player can attack on their first turn.)
+
+  ① Attack Declaration            Leaders or Characters in the Character
+                                  area can attack.
+                                  First, rest the active Leader or Character
+                                  you want to attack with and declare your
+                                  attack.
+                                  Then, choose the target of your attack.
+                                  You can either target your opponentʼs
+                                  Leader or a rested Character in their
+                                  Character area.
+                                  Any                  effects or effects that
+                                  activate when your Leader or Character
+                                  attacks are activated at this point.
+
+
+
+
+  ② Block Step                    The player being attacked can activate
+                                  the         eﬀect of one of their
+                                  Characters.
+
+
+  Continues on the next page
+                                                                                 11
+                     Main Phase                     -2
+
+  Battle (continued)
+
+③ Counter Step                      The player being attacked may perform the
+                                    following actions in any order and as many
+                                    times as they like:
+                                        Activate a Character card s
+                                    [Counter] effect
+                                    Trash a Character card with            to
+                                    activate an eﬀect that increases the power
+                                    of your Leader or one of your Characters by
+                                    the value of the          for the duration of
+                                    the battle.
+                                       Play an Event card
+                                    Trash an Event card with               from
+                                    your hand to activate the eﬀect.
+
+
+                                     Compare the power of the attacking and
+④ Damage Step
+                                     defending cards.
+                                     The attacking card will win if its power is
+                                     greater than or equal to the power of the
+                                     card being attacked, leading to one of the
+                                     following results.
+                                      When the opponentʼs Leader is attacked:      しゅ
+
+
+                                      …The Leader takes 1 damage.
+                                      ▶When the opponentʼs Leader has 0 Life:
+                                      …The attacking player wins the game.
+                                      When the opponentʼs Character is attacked:
+                                      …That Character is K.O.ʼd (trashed).
+                                       Then, proceed to ⑤ End of the Battle.
+
+                                     If the attacking card s power is
+                                     less than the card being attacked,
+                                     the attacking card will lose the battle,
+                                     and nothing will happen. Then, proceed
+                                     to ⑤ End of the Battle.
+
+
+   Damage to Leaders
+   When your Leader takes damage, check the contents of the card at the top
+   of your Life cards without showing your opponent. If that card has a
+   eﬀect, you may reveal the card and activate its        eﬀect instead of adding
+   it to your hand.
+   * You can also choose not to active the       eﬀect. In this case, add the
+   card to your hand without revealing it.
+   * If your Leader takes 2 or more damage due to an eﬀect such as a
+                  , the above process is repeated for every 1 damage taken.
+
+                                                                                        12
+                    Main Phase               -3
+
+     Battle (continued)
+
+ ⑤ End of the Battle            The battle ends.
+                                If there are any eﬀects that activate at
+                                the end of the battle, they can be
+                                activated at this point.
+                                Then, all eﬀects speciﬁed as applying
+                                during this battle are canceled.
+
+
+
+
+                         End Phase
+The End Phase proceeds in the following order:
+ ❶ Any of your eﬀects that activate at the end of the turn will be
+   activated and resolved.
+ ❷ Any of your opponent s eﬀects that activate at the end of
+   the turn will be activated and resolved.
+ ❸ Any of your eﬀects speciﬁed as being restricted to a period
+   such as during this turn are canceled.
+ ❹ Any of your opponent s eﬀects speciﬁed as being restricted to
+   a period such as during this turn are canceled.
+ ❺ Your turn ends and your opponent s turn begins.
+
+
+
+
+                                                                           13
+               Effect Activation Order
+A player whose card has multiple eﬀects that occur at the same
+time can decide in which order to activate these eﬀects, for
+example when a player attacks using a Character with multiple
+               eﬀects.
+If you and your opponent both have eﬀects that occur at the
+same time, the player whose turn it is activates their eﬀects
+ﬁrst. After all of their eﬀects have been resolved, the other
+player will activate their eﬀects.
+
+
+
+
+                   Multicolored Cards
+
+ A single card may have more than
+ one color in this game.
+ For example, the card shown on
+ the right is both red and green.
+ Cards with multiple colors are
+ treated as having all of the
+ speciﬁed colors simultaneously.
+
+
+
+
+  When a Character with DON!! Card(s) Leaves the Field
+
+ When a Character that has been given DON!! card(s) leaves the
+ ﬁeld, for example, due to being K.O. d or returned to a player s
+ hand by an eﬀect, the attached DON!! card(s) should be
+ returned to the cost area and rested.
+
+                                                                    14
+Glossary
+       …An eﬀect that is activated when you play the Character
+        with this eﬀect on the ﬁeld.
+             …An eﬀect that can be activated during your Main
+              Phase.
+         …An eﬀect that is activated during your turn.
+               …An eﬀect that is activated during the End Phase
+                of your turn.
+     …An Event card eﬀect that can be played during your Main
+      Phase.
+         …An Event card eﬀect that can be played during the
+          Counter Step of your opponentʼs turn.
+             …An eﬀect that can be activated only once in a
+              single turn.
+         …An eﬀect that is (or can be) activated when 1 or more
+          DON!! cards are given to the Character. The number of
+          DON!! cards that must be given depends on the
+          number written in the eﬀect.
+①…An eﬀect that can be activated by resting DON!! card(s) in
+  your cost area. The number of DON!! cards that must be rested
+  depends on the number written in the eﬀect.
+         …An eﬀect that can be activated by returning a DON!!
+          card(s) from your ﬁeld (Leader, Character, and Cost
+          areas) to your DON!! deck. The number of DON!! cards
+          that must be returned depends on the number written
+          in the eﬀect. You can return any DON!! cards that have
+          been attached to another card, regardless of whether
+          they are active or rested.
+         …An eﬀect that can be activated during the Block Step.
+          The card can take the place of the Leader or Character
+          being attacked by your opponent.
+      …An eﬀect that allows a Character to attack on the turn in
+       which it is played.
+              …When a Character with this eﬀect deals damage
+               to the opponentʼs Leader in an attack, they deal 2
+               damage.
+        …When a Character with this eﬀect deals damage to the
+         opponentʼs Leader in an attack, the Life card is trashed
+         without its      being activated.
+                                                                    15
+
