@@ -57,7 +57,7 @@ used at all.
 | `optcg/deck.py` | Deck construction rules (50 cards, Leader colors, max 4 copies) |
 | `optcg/engine.py` | `Game`: setup, turn phases, battle, damage, effects, defeat checks |
 | `optcg/actions.py` | `Decision` (a question to a player) and `Action` (an answer) |
-| `optcg/agents.py` | `RandomAgent`, `GreedyAgent` |
+| `optcg/agents.py` | `RandomAgent`, `GreedyAgent` (a baseline, not a strong player) |
 | `optcg/cardpool.py` | Made-up sample cards and two 50-card decks |
 | `optcg/carddb.py` | Loads real cards and decks, decklist parsing, coverage report |
 | `optcg/effect_text.py` | Compiles printed effect text into engine effects |
@@ -147,6 +147,9 @@ Checkpoints are tied to the card list in `data/cards.json`; retrain after refres
 - Infinite loops (11-1) aren't detected; `play_game` gives up after 20,000 decisions.
 - Card text using the new timings (start of turn, start of Main Phase, end of battle) isn't compiled yet; only scripts can use them. Each appears on about one card.
 - No fast state cloning for search bots yet. Replaying `g.history` with the same seed rebuilds a game.
+- `GreedyAgent` is a yardstick, not a good player: it spends every spare DON!! on its Leader, never
+  blocks or counters subtly, and its attacks are shallow. Lopsided deck matchups under greedy play
+  usually say more about the heuristic than about the cards.
 
 ## Effect order
 

@@ -95,6 +95,11 @@ class GreedyAgent(Agent):
             return max(on_leader, key=lambda o: g.power(g.cards[o.card]))
         if good:
             return max(good, key=lambda o: g.cost(g.cards[o.target]))
+        # Nothing wins outright: still swing at the Leader, which either gets through or
+        # spends their Counters. Without this a deck of small Characters never attacks.
+        chip = [o for o in attacks if o.target == opp.leader.uid]
+        if chip:
+            return max(chip, key=lambda o: g.power(g.cards[o.card]))
         return _find(d, "end")
 
     # -- defence
