@@ -6,251 +6,394 @@
 <title>OPTCG Replay</title>
 <style>
 :root {
-  --bg: #12151b; --panel: #1a1f27; --panel2: #222833; --line: #2e3542; --text: #e7eaf0; --dim: #8b93a3;
-  --p0: #4fc3f7; --p1: #ffb74d; --gold: #f2c94c; --bad: #ef5350; --good: #66bb6a; --pick: #b388ff;
+  --bg: #0d1016; --panel: #151a22; --panel2: #1d232e; --line: #2a3140; --text: #e9ecf2; --dim: #8a93a5; --faint: #5a6375;
+  --p0: #5cc8ff; --p1: #ffb547; --gold: #f2c94c; --bad: #ff5a5f; --good: #4cd17a; --pick: #b98cff;
   --red: #d64545; --green: #2e9e5b; --blue: #3b6fd8; --purple: #8a4fd1; --black: #555b66; --yellow: #e0b400;
-  --card: #f6f3ea; --cardText: #1d1d1f;
+  --cw: clamp(60px, min((100vw - 560px) / 9.2, (100vh - 290px) / 5), 128px);  /* field card width */
+  --ch: calc(var(--cw) * 1.397);              /* 63 x 88 mm */
+  --hw: calc(var(--cw) * .74);                /* hand card */
+  --pw: calc(var(--cw) * .62);                /* pile card */
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body { background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
-  display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: 1fr 360px; grid-template-areas:
-  "top top" "board side" "ctl ctl"; }
-header { grid-area: top; display: flex; align-items: center; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--line); }
-header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-header .vs { color: var(--dim); }
-header .result { margin-left: auto; font-weight: 600; }
+  display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-areas: "top top" "board side" "ctl ctl"; }
 .p0 { color: var(--p0); } .p1 { color: var(--p1); }
+b { font-weight: 650; }
+
+/* header */
+header { grid-area: top; display: flex; align-items: center; gap: 14px; padding: 9px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { font-size: 15px; margin: 0; font-weight: 650; }
+header .vs { color: var(--faint); font-weight: 400; margin: 0 4px; }
+header .meta { color: var(--dim); font-size: 13px; }
+header .result { margin-left: auto; font-weight: 650; padding: 3px 12px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); }
 
 /* board */
-#board { grid-area: board; overflow: auto; padding: 12px 18px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.side { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
-.side.turn { box-shadow: inset 0 0 0 1px var(--accent); }
+#board { grid-area: board; overflow: auto; padding: 10px 14px; display: flex; flex-direction: column; justify-content: center; gap: 6px; min-width: 0; }
+.side { position: relative; border-radius: 14px; border: 1px solid var(--line); padding: 8px 12px; display: flex; flex-direction: column; gap: 6px;
+  overflow: hidden; isolation: isolate; background: #10141b; transition: border-color .2s, box-shadow .2s; }
+.side::before { content: ""; position: absolute; inset: 0; z-index: -1; opacity: .16;
+  background: radial-gradient(120% 140% at 0% 100%, var(--c1) 0%, transparent 60%), radial-gradient(120% 140% at 100% 0%, var(--c2) 0%, transparent 60%); }
+.s1::before { transform: rotate(180deg); }
 .side.s0 { --accent: var(--p0); } .side.s1 { --accent: var(--p1); }
-.info { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; color: var(--dim); font-size: 13px; }
-.info .who { color: var(--accent); font-weight: 600; font-size: 14px; }
-.info b { color: var(--text); font-weight: 600; }
-.lifebar, .donbar { display: inline-flex; gap: 3px; vertical-align: middle; margin-left: 4px; }
-.lifecard { width: 13px; height: 18px; border-radius: 2px; background: linear-gradient(135deg, #7b2b2b, #3e1515); border: 1px solid #a14646; }
-.lifecard.up { background: var(--gold); border-color: #fff3; cursor: pointer; }
-.don { width: 11px; height: 11px; border-radius: 50%; background: var(--gold); }
-.don.rested { background: transparent; border: 1.5px solid #f2c94c88; }
-.link { cursor: pointer; text-decoration: underline dotted; }
-.field { display: flex; gap: 10px; align-items: center; min-height: 140px; }
-.field .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
-.chars { display: flex; gap: 8px; flex-wrap: wrap; }
-.hand { display: flex; gap: 6px; flex-wrap: wrap; min-height: 30px; }
-.hand .label, .field .label { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
-.empty { color: #5d6575; font-size: 12px; font-style: italic; }
-.mid { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 4px; min-height: 34px; }
-.phase { color: var(--dim); }
-.battle { background: #3a1d22; border: 1px solid #7a3340; color: #ffd6dc; padding: 4px 12px; border-radius: 999px; font-weight: 600; }
+.side.turn { border-color: color-mix(in srgb, var(--accent) 70%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 28px -6px color-mix(in srgb, var(--accent) 45%, transparent); }
+
+.handrow { display: flex; align-items: flex-end; gap: 12px; min-height: calc(var(--hw) * 1.397); }
+.s1 .handrow { align-items: flex-start; }
+.tag { flex: none; width: calc(var(--pw) * 2 + 18px); display: flex; flex-direction: column; gap: 2px; align-self: center; }
+.tag .who { color: var(--accent); font-weight: 700; font-size: 14px; line-height: 1.2; }
+.tag .agent { color: var(--dim); font-size: 12px; }
+.tag .turnflag { display: inline-block; margin-top: 3px; font-size: 11px; font-weight: 700; color: #0d1016; background: var(--accent); border-radius: 4px; padding: 0 6px; width: fit-content; white-space: nowrap; }
+.hand { display: flex; align-items: flex-end; min-width: 0; flex: 1; }
+.s1 .hand { align-items: flex-start; }
+.hand > .slot + .slot { margin-left: calc(var(--hw) * var(--overlap, -.08)); }
+.hand > .slot:hover { z-index: 2; }
+.hand .count { color: var(--dim); font-size: 12px; margin-left: 10px; align-self: center; white-space: nowrap; }
+
+.mat { display: flex; align-items: center; gap: 12px; }
+.s1 .mat { flex-direction: row; }
+.zone { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; }
+.zone .lbl { color: var(--dim); font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; white-space: nowrap; }
+.zone .lbl b { color: var(--text); font-size: 12px; }
+.divider { width: 1px; align-self: stretch; background: linear-gradient(transparent, var(--line), transparent); flex: none; }
+.chars { display: flex; gap: 8px; flex: 1; min-width: 0; align-items: center; }
+.ghost { width: var(--cw); height: var(--ch); border: 1.5px dashed #ffffff1c; border-radius: 7px; flex: none; margin-bottom: 26px; }
+.zone .ghost { margin-bottom: 0; }
+.stage .ghost { width: var(--pw); height: calc(var(--pw) * 1.397); }
+
+/* piles: life, deck, trash, DON */
+.piles { display: grid; grid-template-columns: repeat(2, auto); gap: 6px 10px; flex: none; }
+.pile { position: relative; width: var(--pw); height: calc(var(--pw) * 1.397); border-radius: 5px; }
+.pile img, .pile .face { width: 100%; height: 100%; border-radius: 5px; object-fit: cover; display: block; box-shadow: 0 2px 6px #0009; }
+.pile.empty { border: 1.5px dashed #ffffff14; }
+.pile.empty img { display: none; }
+.pile .num { position: absolute; right: -5px; bottom: -5px; min-width: 22px; height: 22px; padding: 0 5px; border-radius: 11px; background: #0d1016; border: 1px solid var(--line);
+  font-weight: 750; font-size: 12px; display: grid; place-items: center; }
+.pile.click { cursor: pointer; }
+.pile.don.rested img { transform: rotate(90deg) scale(.8); filter: brightness(.6) saturate(.6); }
+.lifestack { position: relative; width: var(--pw); }
+.lifestack .lc { position: absolute; left: 0; width: var(--pw); height: calc(var(--pw) * 1.397); border-radius: 5px; overflow: hidden; box-shadow: 0 2px 5px #000a; }
+.lifestack .lc img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lifestack .lc.up { outline: 2px solid var(--gold); cursor: pointer; }
 
 /* cards */
-.slot { width: 100px; height: 138px; display: flex; align-items: center; justify-content: center; flex: none; }
-.card { width: 96px; height: 134px; border-radius: 8px; background: var(--card); color: var(--cardText); position: relative;
-  overflow: hidden; display: flex; flex-direction: column; cursor: pointer; transition: transform .25s, box-shadow .2s;
-  box-shadow: 0 1px 3px #0008; }
-.card .stripe { height: 7px; flex: none; }
-.card .top { display: flex; align-items: center; justify-content: space-between; padding: 4px 5px 0; font-size: 10px; color: #666; }
-.card .cost { width: 20px; height: 20px; border-radius: 50%; background: #222; color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 12px; }
-.card .cost.up { background: #2f6d33; } .card .cost.down { background: #8a2b2b; }
-.card .name { padding: 3px 6px 0; font-weight: 700; font-size: 11.5px; line-height: 1.15; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; flex: 0 1 auto; min-height: 0; }
-.card .bottom { flex: none; }
-.card .bottom { margin-top: auto; padding: 0 6px 5px; }
-.card .power { font-size: 17px; font-weight: 800; letter-spacing: -.02em; }
-.card .power.up { color: #1f7a2e; } .card .power.down { color: #b02a2a; }
-.card .ctr { font-size: 10px; color: #6a5a00; font-weight: 700; }
-.card .kw { display: flex; flex-wrap: wrap; gap: 2px; margin-bottom: 2px; }
-.card .kw span { font-size: 8.5px; background: #222; color: #fff; padding: 0 3px; border-radius: 3px; }
-.card .donb { position: absolute; top: 9px; right: 4px; background: var(--gold); color: #3a2c00; font-weight: 800; font-size: 10px; padding: 1px 4px; border-radius: 4px; }
-.card.rested { transform: rotate(90deg) scale(.72); filter: saturate(.55) brightness(.85); }
-.card.leader { outline: 2px solid #0002; }
-.card.small { width: 70px; height: 98px; } .card.small .name { font-size: 10px; } .card.small .power { font-size: 13px; }
-.card.small .top { padding: 3px 4px 0; } .card.small .top .cat { display: none; } .card.small .name { -webkit-line-clamp: 2; padding: 2px 4px 0; }
-.card.small .bottom { padding: 0 4px 4px; } .card.small .cost { width: 17px; height: 17px; font-size: 11px; }
-.card.back { background: repeating-linear-gradient(45deg, #5a2323, #5a2323 6px, #4a1b1b 6px, #4a1b1b 12px); cursor: default; }
-.card.picked { box-shadow: 0 0 0 3px var(--pick), 0 0 16px var(--pick); }
-.card.attacker { box-shadow: 0 0 0 3px var(--bad), 0 0 16px var(--bad); }
-.card.target { box-shadow: 0 0 0 3px #fff, 0 0 14px #fff8; }
-.card.picked.attacker, .card.picked.target { box-shadow: 0 0 0 3px var(--pick), 0 0 0 6px var(--bad), 0 0 16px var(--bad); }
-.card.new { animation: pop .35s ease-out; }
+.slot { display: flex; flex-direction: column; align-items: center; flex: none; position: relative; }
+.cbox { width: var(--cw); height: var(--ch); display: grid; place-items: center; transition: width .25s; }
+.slot.rested .cbox { width: calc(var(--ch) * .8); }
+.card { width: var(--cw); height: var(--ch); border-radius: 7px; position: relative; overflow: hidden; cursor: zoom-in;
+  background: #f4f1e8; color: #1d1d1f; box-shadow: 0 3px 10px #000b; transition: transform .25s, box-shadow .2s, filter .25s; }
+.card > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.slot.rested .card { transform: rotate(90deg) scale(.8); filter: brightness(.72) saturate(.7); }
+.slot.hand-card .cbox, .slot.hand-card .card { width: var(--hw); height: calc(var(--hw) * 1.397); }
+.slot.hand-card .card { border-radius: 5px; }
+.card.back { cursor: default; }
+
+/* text card, shown when there is no art */
+.tc { position: absolute; inset: 0; display: flex; flex-direction: column; font-size: 10.5px; }
+.tc .stripe { height: 6px; flex: none; }
+.tc .tcost { margin: 4px 0 0 4px; width: 18px; height: 18px; border-radius: 50%; background: #222; color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 11px; }
+.tc .tname { padding: 3px 5px 0; font-weight: 700; line-height: 1.15; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.tc .tcat { margin-top: auto; padding: 0 5px 4px; color: #666; font-size: 9.5px; }
+
+/* overlays on a card */
+.badge-cost { position: absolute; top: 3%; left: 4%; width: 26%; aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center;
+  font-weight: 800; font-size: calc(var(--cw) * .15); color: #fff; border: 2px solid #fff; box-shadow: 0 1px 4px #000a; z-index: 1; }
+.badge-cost.up { background: #2a8a46; } .badge-cost.down { background: #b83232; }
+.kws { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px; display: flex; flex-wrap: wrap; gap: 2px; justify-content: center;
+  background: linear-gradient(transparent, #000c 40%); z-index: 1; }
+.kws span { font-size: 9px; font-weight: 700; color: #fff; background: #ffffff26; border: 1px solid #ffffff40; padding: 0 4px; border-radius: 3px; line-height: 1.45; }
+.kws span.neg { background: #b8323299; border-color: #ff8a8a66; }
+.cap { height: 22px; margin-top: 4px; display: flex; gap: 4px; align-items: center; justify-content: center; }
+.pow { font-weight: 800; font-size: 13px; padding: 1px 8px; border-radius: 6px; background: #0d1016e6; border: 1px solid var(--line); letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.pow.up { color: var(--good); border-color: #4cd17a66; } .pow.down { color: var(--bad); border-color: #ff5a5f66; }
+.donchip { font-weight: 800; font-size: 11.5px; padding: 1px 6px; border-radius: 6px; background: var(--gold); color: #3a2c00; }
+
+/* highlights */
+.card.picked { box-shadow: 0 0 0 3px var(--pick), 0 0 18px var(--pick); }
+.card.attacker { box-shadow: 0 0 0 3px var(--bad), 0 0 20px var(--bad); }
+.card.target { box-shadow: 0 0 0 3px #fff, 0 0 18px #fffa; }
+.card.picked.attacker, .card.picked.target { box-shadow: 0 0 0 3px var(--pick), 0 0 0 6px var(--bad), 0 0 20px var(--bad); }
+.slot.new .card { animation: pop .35s ease-out; }
 @keyframes pop { from { transform: scale(.6); opacity: 0; } }
+.slot.rested.new .card { animation: none; }
+
+/* middle strip */
+.mid { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 36px; flex-wrap: wrap; }
+.pill { padding: 4px 12px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); color: var(--dim); font-size: 13px; }
+.pill b { color: var(--text); }
+.battle { display: flex; align-items: center; gap: 8px; padding: 3px 12px 3px 4px; border-radius: 999px; background: #3a1820; border: 1px solid #7a3340; color: #ffd9de; font-weight: 600; font-size: 13px; }
+.battle img { width: 22px; height: 30px; border-radius: 3px; object-fit: cover; }
+.battle .arrow { color: var(--bad); }
+
+/* zoom */
+#zoom { position: fixed; z-index: 50; pointer-events: none; width: 300px; border-radius: 14px; overflow: hidden; display: none;
+  box-shadow: 0 18px 50px #000e, 0 0 0 1px #ffffff1a; background: var(--panel2); }
+#zoom img { display: block; width: 100%; }
+#zoom .zt { padding: 10px 12px; font-size: 13px; }
 
 /* side panel */
-aside { grid-area: side; border-left: 1px solid var(--line); overflow: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 14px; }
-aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 0 0 6px; font-weight: 600; }
-.step { font-size: 22px; font-weight: 700; }
-.step small { font-size: 13px; color: var(--dim); font-weight: 400; }
-.events { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
-.events li { background: var(--panel2); border-radius: 6px; padding: 5px 8px; font-size: 13px; }
-.events li.turnline { background: transparent; color: var(--dim); padding: 2px 0; font-weight: 600; }
-.decision .who { font-weight: 600; }
-.opts { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
-.opts li { padding: 4px 8px; border-radius: 6px; color: var(--dim); font-size: 13px; border: 1px solid transparent; }
-.opts li.chosen { color: var(--text); border-color: var(--pick); background: #b388ff1a; font-weight: 600; }
+aside { grid-area: side; border-left: 1px solid var(--line); overflow: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 16px; background: var(--panel); }
+aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 0 0 7px; font-weight: 650; }
+.step { font-size: 20px; font-weight: 700; line-height: 1.2; }
+.step small { display: block; font-size: 13px; color: var(--dim); font-weight: 400; margin-top: 2px; }
+.decision .q { font-size: 13.5px; }
+.opts { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.opts li { padding: 5px 9px; border-radius: 7px; color: var(--dim); font-size: 13px; border: 1px solid transparent; }
+.opts li.chosen { color: var(--text); border-color: var(--pick); background: #b98cff1c; font-weight: 600; }
 .opts li.chosen::before { content: "\2192  "; color: var(--pick); }
-.detail { background: var(--panel2); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+.opts li.more { font-style: italic; color: var(--faint); cursor: pointer; }
+.events { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.events li { background: var(--panel2); border-radius: 7px; padding: 6px 9px; font-size: 13px; border-left: 3px solid var(--line); }
+.events li.l0 { border-left-color: var(--p0); } .events li.l1 { border-left-color: var(--p1); }
+.events li.turnline { background: transparent; border: 0; color: var(--dim); padding: 2px 0; font-weight: 650; }
+.events li.none { background: transparent; border: 0; color: var(--faint); padding: 0; }
+.detail { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.detail img.big { width: 100%; border-radius: 12px; box-shadow: 0 6px 20px #000a; }
 .detail .title { font-weight: 700; font-size: 15px; }
-.detail .meta { color: var(--dim); font-size: 12px; margin: 2px 0 6px; }
-.detail p { margin: 4px 0; white-space: pre-wrap; }
+.detail .title span { color: var(--dim); font-weight: 400; font-size: 12px; }
+.detail .meta { color: var(--dim); font-size: 12px; }
+.detail p { margin: 0; white-space: pre-wrap; }
 .detail .un { color: var(--bad); font-size: 12px; }
+.trashgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); gap: 6px; }
+.trashgrid .t { aspect-ratio: 63 / 88; border-radius: 5px; overflow: hidden; cursor: zoom-in; background: var(--panel2); font-size: 9.5px; padding: 3px; }
+.trashgrid .t img { width: 100%; height: 100%; object-fit: cover; display: block; margin: -3px; width: calc(100% + 6px); height: calc(100% + 6px); }
+.empty { color: var(--faint); font-size: 12.5px; font-style: italic; }
 
 /* controls */
-#ctl { grid-area: ctl; display: flex; align-items: center; gap: 10px; padding: 10px 18px; border-top: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
-button, select { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; font: inherit; cursor: pointer; }
-button:hover { border-color: #4a5466; }
-button.primary { background: #3d4b66; min-width: 84px; }
+#ctl { grid-area: ctl; display: flex; align-items: center; gap: 10px; padding: 9px 18px; border-top: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+.group { display: flex; gap: 4px; }
+button, select { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; font: inherit; font-size: 13px; cursor: pointer; }
+button:hover, select:hover { border-color: #46506a; }
+button.primary { background: #3b3160; border-color: #5b4a94; min-width: 86px; font-weight: 600; }
 #timeline { flex: 1; min-width: 160px; accent-color: var(--pick); }
-label { color: var(--dim); display: inline-flex; gap: 5px; align-items: center; font-size: 13px; }
-.keys { color: #5d6575; font-size: 12px; }
+label { color: var(--dim); display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+.keys { color: var(--faint); font-size: 12px; }
 
-@media (max-width: 1000px) {
-  body { grid-template-columns: 1fr; grid-template-areas: "top" "board" "side" "ctl"; height: auto; }
+@media (max-width: 1100px) {
+  :root { --cw: clamp(48px, (100vw - 240px) / 9.4, 110px); }
+  body { grid-template-columns: 1fr; grid-template-rows: auto auto auto auto; grid-template-areas: "top" "board" "side" "ctl"; height: auto; }
   aside { border-left: 0; border-top: 1px solid var(--line); }
+  #ctl { position: sticky; bottom: 0; }
+  #zoom { display: none !important; }
 }
 </style>
 </head>
 <body>
 <header>
   <h1 id="title"></h1>
+  <span class="meta" id="meta"></span>
   <span class="result" id="result"></span>
 </header>
 <main id="board"></main>
 <aside>
-  <div>
-    <div class="step" id="step"></div>
-  </div>
-  <section><h2>What happened</h2><ul class="events" id="events"></ul></section>
+  <div class="step" id="step"></div>
   <section class="decision" id="decision"></section>
+  <section><h2>What happened</h2><ul class="events" id="events"></ul></section>
   <section id="detail"></section>
 </aside>
 <div id="ctl">
-  <button id="prevTurn" title="Previous turn (PageUp)">&#x23EE; Turn</button>
-  <button id="prev" title="Previous (Left arrow)">&#x25C0;</button>
-  <button id="play" class="primary" title="Play / pause (Space)">&#x25B6; Play</button>
-  <button id="next" title="Next (Right arrow)">&#x25B6;</button>
-  <button id="nextTurn" title="Next turn (PageDown)">Turn &#x23ED;</button>
-  <input type="range" id="timeline" min="0" value="0">
+  <div class="group">
+    <button id="prevTurn" title="Previous turn (PageUp)">&#x23EE;</button>
+    <button id="prev" title="Previous step (Left arrow)">&#x25C0;</button>
+    <button id="play" class="primary" title="Play / pause (Space)">&#x25B6; Play</button>
+    <button id="next" title="Next step (Right arrow)">&#x25B6;</button>
+    <button id="nextTurn" title="Next turn (PageDown)">&#x23ED;</button>
+  </div>
+  <input type="range" id="timeline" min="0" value="0" aria-label="Timeline">
   <label>Speed <select id="speed"><option value="2500">Slow</option><option value="1300" selected>Normal</option><option value="600">Fast</option><option value="200">Very fast</option></select></label>
+  <label>Hands <select id="hands"><option value="both">Both</option><option value="0">P0 only</option><option value="1">P1 only</option><option value="none">Hidden</option></select></label>
   <label><input type="checkbox" id="eventsOnly" checked> Skip quiet steps</label>
-  <label>Hands <select id="hands"><option value="both">Both</option><option value="0">Player 0 only</option><option value="1">Player 1 only</option><option value="none">Hidden</option></select></label>
-  <span class="keys">&larr; &rarr; step &middot; space play</span>
+  <span class="keys">&larr; &rarr; step &middot; space play &middot; PgUp/PgDn turn</span>
 </div>
+<div id="zoom"></div>
 <script>
 const R = /*REPLAY_DATA*/null;
-const F = R.frames, C = R.cards;
+const F = R.frames, C = R.cards, A = R.art || null;
 const COLORS = { red: "var(--red)", green: "var(--green)", blue: "var(--blue)", purple: "var(--purple)", black: "var(--black)", yellow: "var(--yellow)" };
 let i = 0, timer = null, prevUids = new Set(), selected = null;
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
-const pname = p => `<span class="p${p}">P${p} ${esc(R.players[p].leader)}</span>`;
+const short = p => R.players[p].leader.replace(/^\(.*?\)\s*/, "");
+const pname = p => `<span class="p${p}">${esc(short(p))}</span>`;
+const asset = path => A && path ? encodeURI(A.base + "/" + path) : null;
+const art = id => asset(A && A.cards[id]);
+const img = (src, cls = "") => src ? `<img src="${src}" class="${cls}" alt="" onerror="this.remove()">` : "";
 
 function stripe(cols) {
   const c = cols.map(x => COLORS[x] || "#999");
   return c.length === 1 ? c[0] : `linear-gradient(90deg, ${c.map((x, k) => `${x} ${k * 100 / c.length}%, ${x} ${(k + 1) * 100 / c.length}%`).join(", ")})`;
 }
 
+// The text card sits under the art, so a missing image still leaves a readable card.
+function textCard(d, cost) {
+  return `<div class="tc"><div class="stripe" style="background:${stripe(d.col)}"></div>
+    <div class="tcost">${d.cat === "Leader" ? d.life : cost}</div><div class="tname">${esc(d.n)}</div><div class="tcat">${esc(d.cat)}</div></div>`;
+}
+
 function cardHTML(c, opts = {}) {
   const d = C[c.i], f = F[i];
   const cls = ["card"];
-  if (opts.small) cls.push("small");
-  if (d.cat === "Leader") cls.push("leader");
-  if (c.r) cls.push("rested");
   if (f.d && f.d.hl.includes(c.u)) cls.push("picked");
   if (f.b && f.b[0] === c.u) cls.push("attacker");
   if (f.b && f.b[1] === c.u) cls.push("target");
-  if (opts.field && !prevUids.has(c.u) && i > 0) cls.push("new");
-  const costCls = c.c === undefined ? "" : c.c > d.cost ? "up" : c.c < d.cost ? "down" : "";
-  const powBase = d.pow;
-  const powCls = c.p === undefined ? "" : c.p > powBase ? "up" : c.p < powBase ? "down" : "";
-  const cost = d.cat === "Leader" ? `<span>Life ${d.life}</span>` : `<span class="cost ${costCls}">${c.c ?? d.cost}</span>`;
-  const kws = (c.k || []).map(k => `<span>${esc(k)}</span>`).join("");
-  const ctr = c.x ? `<div class="ctr">${opts.small ? "" : "Counter "}+${c.x}</div>` : "";
-  const power = c.p !== undefined ? `<div class="power ${powCls}">${c.p}</div>` : `<div class="ctr" style="color:#666">${esc(d.cat)}</div>`;
-  return `<div class="slot" style="${opts.small ? "width:72px;height:100px" : ""}"><div class="${cls.join(" ")}" data-id="${esc(c.i)}" title="${esc(d.n)}">
-    <div class="stripe" style="background:${stripe(d.col)}"></div>
-    <div class="top">${cost}<span class="cat">${d.cat === "Leader" ? "" : esc(d.cat)}</span></div>
-    ${c.n ? `<div class="donb">+${c.n}</div>` : ""}
-    <div class="name">${esc(d.n)}</div>
-    <div class="bottom">${kws ? `<div class="kw">${kws}</div>` : ""}${ctr}${power}</div>
-  </div></div>`;
+  const slot = ["slot"];
+  if (opts.hand) slot.push("hand-card");
+  if (c.r) slot.push("rested");
+  if (opts.field && i > 0 && !prevUids.has(c.u)) slot.push("new");
+
+  const cost = c.c ?? d.cost;
+  const costBadge = c.c !== undefined && c.c !== d.cost && d.cat !== "Leader"
+    ? `<div class="badge-cost ${c.c > d.cost ? "up" : "down"}" title="Cost ${c.c} (printed ${d.cost})">${c.c}</div>` : "";
+  const kws = (c.k || []).map(k => `<span class="${k === "Can't attack" ? "neg" : ""}">${esc(k)}</span>`).join("");
+  let cap = "";
+  if (!opts.hand) {
+    const pc = c.p === undefined ? "" : c.p > d.pow ? "up" : c.p < d.pow ? "down" : "";
+    cap = `<div class="cap">${c.p !== undefined ? `<span class="pow ${pc}">${c.p}</span>` : ""}${c.n ? `<span class="donchip" title="${c.n} DON!! attached">+${c.n}</span>` : ""}</div>`;
+  }
+  return `<div class="${slot.join(" ")}"><div class="cbox"><div class="${cls.join(" ")}" data-id="${esc(c.i)}">
+    ${textCard(d, cost)}${img(art(c.i))}${costBadge}${kws ? `<div class="kws">${kws}</div>` : ""}
+  </div></div>${cap}</div>`;
 }
 
-function backHTML() { return `<div class="slot" style="width:72px;height:100px"><div class="card small back"></div></div>`; }
+function backHTML() {
+  return `<div class="slot hand-card"><div class="cbox"><div class="card back">${img(asset(A && A.back)) ||
+    `<div class="tc" style="background:repeating-linear-gradient(45deg,#5a2323,#5a2323 6px,#4a1b1b 6px,#4a1b1b 12px)"></div>`}</div></div></div>`;
+}
+
+function pile(label, count, face, extra = "", attrs = "") {
+  return `<div class="zone"><div class="pile ${count ? "" : "empty"} ${extra}" ${attrs}>${face}${count ? `<span class="num">${count}</span>` : ""}</div><div class="lbl">${label}</div></div>`;
+}
+
+function lifeHTML(s) {
+  const n = s.life.length, step = 9;
+  const back = asset(A && A.back);
+  const cards = s.life.map((id, k) => id
+    ? `<div class="lc up" data-id="${esc(id)}" style="top:${k * step}px">${img(art(id)) || textCard(C[id], C[id].cost)}</div>`
+    : `<div class="lc" style="top:${k * step}px">${img(back) || `<div class="tc" style="background:#5a2323"></div>`}</div>`).join("");
+  return `<div class="zone"><div class="lbl">Life <b>${n}</b></div>
+    <div class="lifestack" style="height:calc(var(--pw) * 1.397 + ${Math.max(0, n - 1) * step}px)">${cards || `<div class="pile empty"></div>`}</div></div>`;
+}
 
 function sideHTML(p, f) {
   const s = f.s[p], [da, dr, dd] = s.don;
-  const life = s.life.map((id, k) => id ? `<span class="lifecard up" data-id="${esc(id)}" title="${esc(C[id].n)} (face-up)"></span>` : `<span class="lifecard"></span>`).join("");
-  const dons = "<span class='don'></span>".repeat(da) + "<span class='don rested'></span>".repeat(dr);
-  const top = s.trash.length ? ` &middot; top: <span class="link" data-id="${esc(s.trash[s.trash.length - 1])}">${esc(C[s.trash[s.trash.length - 1]].n)}</span>` : "";
-  const info = `<div class="info"><span class="who">${pname(p)}${R.players[p].agent ? ` <span style="color:var(--dim);font-weight:400">(${esc(R.players[p].agent)})</span>` : ""}</span>
-    <span>Life <b>${s.life.length}</b><span class="lifebar">${life}</span></span>
-    <span>DON!! <b>${da}</b> active, <b>${dr}</b> rested<span class="donbar">${dons}</span> &middot; ${dd} left</span>
-    <span>Deck <b>${s.deck}</b></span>
-    <span><span class="link" data-trash="${p}">Trash <b>${s.trash.length}</b></span>${top}</span>
-    <span>Hand <b>${s.H.length}</b></span></div>`;
-  const chars = s.C.length ? s.C.map(c => cardHTML(c, { field: true })).join("") : `<span class="empty">No Characters</span>`;
-  const field = `<div class="field">${cardHTML(s.L, { field: true })}${s.S ? cardHTML(s.S, { field: true }) : ""}<div class="sep"></div><div class="chars">${chars}</div></div>`;
-  const handMode = $("hands").value;
-  const showHand = handMode === "both" || handMode === String(p);
-  const hand = `<div class="hand">${s.H.length ? s.H.map(c => showHand ? cardHTML(c, { small: true }) : backHTML()).join("") : `<span class="empty">Empty hand</span>`}</div>`;
-  const parts = p === 1 ? [hand, info, field] : [field, info, hand];
-  return `<section class="side s${p} ${f.tp === p && f.t > 0 ? "turn" : ""}">${parts.join("")}</section>`;
+  const mine = f.tp === p && f.t > 0;
+
+  const mode = $("hands").value, show = mode === "both" || mode === String(p);
+  const overlap = s.H.length > 7 ? -0.45 : s.H.length > 5 ? -0.25 : -0.06;
+  const hand = `<div class="hand" style="--overlap:${overlap}">${s.H.map(c => show ? cardHTML(c, { hand: true }) : backHTML()).join("")}
+    <span class="count">${s.H.length ? `${s.H.length} in hand` : "Empty hand"}</span></div>`;
+  const agent = R.players[p].agent;
+  const tag = `<div class="tag"><span class="who">P${p} &middot; ${esc(short(p))}</span>${agent ? `<span class="agent">${esc(agent)}</span>` : ""}
+    ${mine ? `<span class="turnflag">CURRENT TURN</span>` : ""}</div>`;
+  const handrow = `<div class="handrow">${tag}${hand}</div>`;
+
+  const chars = s.C.map(c => cardHTML(c, { field: true })).join("") + `<div class="ghost"></div>`.repeat(Math.max(0, 5 - s.C.length));
+  const topTrash = s.trash[s.trash.length - 1];
+  const piles = `<div class="piles">
+    ${pile(`Deck`, s.deck, img(asset(A && A.back)))}
+    ${pile(`Trash`, s.trash.length, topTrash ? (img(art(topTrash)) || `<div class="face" style="background:#2a2f3a"></div>`) : "", "click", `data-trash="${p}"`)}
+    ${pile(`DON!!`, da, img(asset(A && A.don)), "don", `title="${da} active DON!!"`)}
+    ${pile(`Rested`, dr, img(asset(A && A.don)), "don rested", `title="${dr} rested DON!!, ${dd} left in the DON!! deck"`)}
+  </div>`;
+  const mat = `<div class="mat">${lifeHTML(s)}<div class="divider"></div>
+    <div class="zone">${cardHTML(s.L, { field: true })}</div>
+    <div class="zone stage">${s.S ? cardHTML(s.S, { field: true }) : `<div class="ghost"></div><div class="lbl">Stage</div>`}</div>
+    <div class="divider"></div><div class="chars">${chars}</div><div class="divider"></div>${piles}</div>`;
+
+  const cols = C[R.players[p].id].col.map(c => COLORS[c] || "#888");
+  const wash = `--c1:${cols[0]};--c2:${cols[cols.length - 1]}`;
+  return `<section class="side s${p} ${mine ? "turn" : ""}" style="${wash}">${p === 1 ? handrow + mat : mat + handrow}</section>`;
 }
+
+function findCard(f, u) { for (const s of f.s) for (const c of [s.L, ...s.C]) if (c.u === u) return c; }
 
 function render() {
   const f = F[i];
-  const top = 1, bottom = 0;
-  let mid = `<span class="phase">Turn <b>${f.t}</b> &middot; ${f.t ? pname(f.tp) + "'s turn" : "Setup"} &middot; ${esc(f.ph.replace(/_/g, " "))} phase</span>`;
+  let mid = `<span class="pill">${f.t ? `Turn <b>${f.t}</b> &middot; ${pname(f.tp)}` : "Setup"} &middot; ${esc(f.ph.replace(/_/g, " "))}</span>`;
   if (f.b) {
-    const find = u => { for (const s of f.s) for (const c of [s.L, ...s.C]) if (c.u === u) return c; };
-    const a = find(f.b[0]), t = find(f.b[1]);
-    if (a && t) mid += `<span class="battle">Battle: ${esc(C[a.i].n)} (${a.p}) &rarr; ${esc(C[t.i].n)} (${t.p})</span>`;
+    const a = findCard(f, f.b[0]), t = findCard(f, f.b[1]);
+    if (a && t) mid += `<span class="battle">${img(art(a.i))}${esc(C[a.i].n)} <b>${a.p}</b> <span class="arrow">&#x27F6;</span> ${img(art(t.i))}${esc(C[t.i].n)} <b>${t.p}</b></span>`;
   }
-  $("board").innerHTML = sideHTML(top, f) + `<div class="mid">${mid}</div>` + sideHTML(bottom, f);
+  $("board").innerHTML = sideHTML(1, f) + `<div class="mid">${mid}</div>` + sideHTML(0, f);
 
-  $("step").innerHTML = `Step ${i + 1} <small>of ${F.length} &middot; turn ${f.t}</small>`;
+  $("step").innerHTML = `${f.t ? `Turn ${f.t}` : "Setup"}<small>Step ${i + 1} of ${F.length}</small>`;
   const lines = f.log.map(l => {
     const m = l.replace(/^\[T\d+\] /, "");
-    return m.startsWith("---") ? `<li class="turnline">${esc(m.replace(/-+/g, "").trim())}</li>` : `<li>${esc(m)}</li>`;
+    if (m.startsWith("---")) return `<li class="turnline">${esc(m.replace(/-+/g, "").trim())}</li>`;
+    const who = /^Player ([01])\b/.exec(m);
+    return `<li class="${who ? "l" + who[1] : ""}">${esc(m)}</li>`;
   });
-  $("events").innerHTML = lines.join("") || `<li class="turnline" style="font-weight:400">Nothing new since the last step</li>`;
+  $("events").innerHTML = lines.join("") || `<li class="none">Nothing new since the last step</li>`;
 
   if (f.d) {
     const d = f.d;
-    $("decision").innerHTML = `<h2>Decision</h2><div><span class="who">${pname(d.pl)}</span> &middot; ${esc(d.q || d.kind)}</div>
-      <ul class="opts">${d.o.map((o, k) => `<li class="${k === d.pick ? "chosen" : ""}">${esc(o)}</li>`).join("")}</ul>`;
+    const MAX = 8;
+    let opts = d.o.map((o, k) => ({ o, k }));
+    if (opts.length > MAX && !showAllOpts) {
+      const keep = new Set([d.pick, ...opts.slice(0, MAX - 1).map(x => x.k)]);
+      opts = opts.filter(x => keep.has(x.k));
+    }
+    const more = d.o.length > opts.length ? `<li class="more" id="moreOpts">+ ${d.o.length - opts.length} more options</li>` : "";
+    $("decision").innerHTML = `<h2>Decision &middot; P${d.pl} ${pname(d.pl)}</h2><div class="q">${esc(d.q || d.kind)}</div>
+      <ul class="opts">${opts.map(({ o, k }) => `<li class="${k === d.pick ? "chosen" : ""}">${esc(o)}</li>`).join("")}${more}</ul>`;
+    const m = $("moreOpts"); if (m) m.onclick = () => { showAllOpts = true; render(); };
   } else {
     const w = R.winner;
-    $("decision").innerHTML = `<h2>Game over</h2><div class="step" style="font-size:18px">${w === null ? "Draw" : pname(w) + " wins"}</div>`;
+    $("decision").innerHTML = `<h2>Game over</h2><div class="step">${w === null ? "Draw" : pname(w) + " wins"}</div>`;
   }
   renderDetail();
   $("timeline").value = i;
   prevUids = new Set(f.s.flatMap(s => [s.L, s.S, ...s.C].filter(Boolean).map(c => c.u)));
 }
+let showAllOpts = false;
 
-function renderDetail() {
-  if (!selected) { $("detail").innerHTML = `<h2>Card</h2><div class="empty">Click a card to read it.</div>`; return; }
-  if (selected.trash !== undefined) {
-    const t = F[i].s[selected.trash].trash;
-    $("detail").innerHTML = `<h2>P${selected.trash} trash (${t.length})</h2><div class="detail">${t.length ? t.slice().reverse().map(id => `<div class="link" data-id="${esc(id)}">${esc(C[id].n)}</div>`).join("") : `<span class="empty">Empty</span>`}</div>`;
-    return;
-  }
-  const d = C[selected.id];
-  const stats = [d.cat, d.col.join("/")];
-  if (d.cat === "Leader") stats.push(`Life ${d.life}`); else stats.push(`Cost ${d.cost}`);
+function cardInfo(id) {
+  const d = C[id];
+  const stats = [d.cat, d.col.map(c => c[0].toUpperCase() + c.slice(1)).join("/")];
+  stats.push(d.cat === "Leader" ? `Life ${d.life}` : `Cost ${d.cost}`);
   if (d.pow) stats.push(`${d.pow} power`);
   if (d.cnt) stats.push(`Counter +${d.cnt}`);
-  $("detail").innerHTML = `<h2>Card</h2><div class="detail"><div class="title">${esc(d.n)} <span style="color:var(--dim);font-weight:400;font-size:12px">${esc(selected.id)}</span></div>
+  return `<div class="title">${esc(d.n)} <span>${esc(id)}</span></div>
     <div class="meta">${esc(stats.join(" · "))}${d.ty.length ? "<br>" + esc(d.ty.join(" / ")) : ""}</div>
     ${d.txt ? `<p>${esc(d.txt)}</p>` : ""}${d.trg ? `<p>${esc(d.trg)}</p>` : ""}
-    ${d.un.length ? `<p class="un">Not implemented: ${esc(d.un.join(" / "))}</p>` : ""}</div>`;
+    ${d.un.length ? `<p class="un">Not implemented: ${esc(d.un.join(" / "))}</p>` : ""}`;
 }
 
+function renderDetail() {
+  if (!selected) { $("detail").innerHTML = `<h2>Card</h2><div class="empty">Hover a card to zoom in, click it to keep it here.</div>`; return; }
+  if (selected.trash !== undefined) {
+    const t = F[i].s[selected.trash].trash;
+    $("detail").innerHTML = `<h2>P${selected.trash} trash &middot; ${t.length}</h2>${t.length
+      ? `<div class="trashgrid">${t.slice().reverse().map(id => `<div class="t" data-id="${esc(id)}" title="${esc(C[id].n)}">${img(art(id)) || esc(C[id].n)}</div>`).join("")}</div>`
+      : `<div class="empty">Empty</div>`}`;
+    return;
+  }
+  $("detail").innerHTML = `<h2>Card</h2><div class="detail">${img(art(selected.id), "big")}${cardInfo(selected.id)}</div>`;
+}
+
+// Hover zoom
+const zoom = $("zoom");
+document.addEventListener("mouseover", e => {
+  const el = e.target.closest("[data-id]");
+  if (!el) { zoom.style.display = "none"; return; }
+  const id = el.dataset.id, src = art(id);
+  zoom.innerHTML = src ? img(src) : `<div class="zt detail">${cardInfo(id)}</div>`;
+  zoom.style.display = "block";
+});
+document.addEventListener("mousemove", e => {
+  if (zoom.style.display !== "block") return;
+  const w = zoom.offsetWidth, h = zoom.offsetHeight, pad = 18;
+  let x = e.clientX + pad, y = e.clientY - h / 2;
+  if (x + w > innerWidth - 8) x = e.clientX - w - pad;
+  y = Math.max(8, Math.min(innerHeight - h - 8, y));
+  zoom.style.left = x + "px"; zoom.style.top = y + "px";
+});
+document.addEventListener("mouseleave", () => zoom.style.display = "none");
+
 const quiet = k => F[k].log.length === 0 && k !== F.length - 1 && k !== 0;
-function go(k) { i = Math.max(0, Math.min(F.length - 1, k)); render(); }
+function go(k) { const n = Math.max(0, Math.min(F.length - 1, k)); if (n !== i) showAllOpts = false; i = n; render(); }
 function step(dir) {
   let k = i + dir;
   if ($("eventsOnly").checked) while (k > 0 && k < F.length - 1 && quiet(k)) k += dir;
@@ -269,7 +412,8 @@ function play(on) {
   $("play").innerHTML = timer ? "&#x23F8; Pause" : "&#x25B6; Play";
 }
 
-$("title").innerHTML = `${pname(0)} <span class="vs">vs</span> ${pname(1)} <span class="vs" style="font-weight:400;font-size:13px">&middot; seed ${R.seed}</span>`;
+$("title").innerHTML = `${pname(0)}<span class="vs">vs</span>${pname(1)}`;
+$("meta").textContent = `seed ${R.seed}${R.first !== undefined && R.first !== null ? ` · P${R.first} went first` : ""}`;
 $("result").innerHTML = R.winner === null ? "Draw" : `${pname(R.winner)} wins in ${R.turns} turns`;
 $("timeline").max = F.length - 1;
 $("timeline").oninput = e => go(+e.target.value);
@@ -292,6 +436,8 @@ document.addEventListener("keydown", e => {
     PageDown: () => jumpTurn(1), PageUp: () => jumpTurn(-1) }[e.key];
   if (k) { e.preventDefault(); k(); }
 });
+// Fetch all the art once so stepping never shows a half-loaded board.
+if (A) for (const id in A.cards) new Image().src = art(id);
 render();
 </script>
 </body>

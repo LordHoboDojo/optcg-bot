@@ -15,7 +15,12 @@ python3 -m unittest discover tests                           # rule tests (.venv
 
 `optcg.replay` records a game and writes it as one HTML file you open in a browser: a slideshow
 with one step per decision, showing both boards and hands, what happened since the last step,
-the options and the one chosen. Click a card for its text; arrow keys step, space plays.
+the options and the one chosen. Hover a card to zoom in, click it to keep it in the side panel;
+arrow keys step, space plays.
+
+Card art comes from `StreamingAssets/Cards/<set>/<id>.png|jpg`. The page links to it by relative
+path instead of embedding it, so a replay shows art only while it sits where it can reach that
+folder (anywhere inside this project works). Without it the viewer draws plain text cards.
 
 ```bash
 python3 -m optcg.replay --p0 greedy --p1 greedy --seed 3 --open

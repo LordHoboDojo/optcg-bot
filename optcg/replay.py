@@ -5,12 +5,18 @@
 
 One frame per decision: the board when the decision was asked (both hands visible), the options,
 the one chosen, and the log lines since the previous frame. A last frame shows the end of the game.
+
+Card art comes from StreamingAssets/ next to the project, linked by relative path rather than
+embedded, so a replay shows art only while it can still reach that folder. Without it the viewer
+draws text cards instead.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import webbrowser
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +27,27 @@ from .engine import Game
 from .play import MAX_STEPS, make_agent, resolve_deck
 
 VIEWER = Path(__file__).with_name("replay_viewer.html")
+ASSETS = Path(__file__).resolve().parent.parent / "StreamingAssets"
+
+
+@lru_cache(maxsize=4)
+def _art_index(assets: Path) -> dict[str, str]:
+    """Card id -> full-size image path relative to the assets folder."""
+    out = {}
+    for f in sorted((assets / "Cards").glob("*/*")):
+        if f.suffix in (".png", ".jpg") and not f.stem.endswith("_small"):
+            out.setdefault(f.stem, f.relative_to(assets).as_posix())
+    return out
+
+
+def art(replay: dict, assets: Path = ASSETS) -> dict:
+    """Image paths for a replay's cards and card backs, relative to `assets`."""
+    if not (assets / "Cards").is_dir():
+        return {}
+    index = _art_index(assets)
+    return {"cards": {i: index[i] for i in replay["cards"] if i in index},
+            "back": "CardBacks/CardBackRegular.png", "don": "Cards/Don/Don.png",
+            "donBack": "CardBacks/CardBackDon.png"}
 
 
 def _card(g: Game, c: Card) -> dict:
@@ -91,12 +118,18 @@ def record(decks: tuple[Deck, Deck], agents: tuple[Agent, Agent], seed: Optional
         raise RuntimeError(f"game did not finish in {MAX_STEPS} steps")
     frames.append(_frame(g, seen))
     ids = {c.d.id for c in g.cards.values()}
-    return {"players": [{"leader": decks[p].leader.name, "agent": names[p]} for p in (0, 1)],
+    return {"players": [{"leader": decks[p].leader.name, "id": decks[p].leader.id, "agent": names[p]} for p in (0, 1)],
             "seed": seed, "winner": g.winner, "turns": g.turn_number, "first": g.first_player,
             "cards": {i: _def(g, i) for i in sorted(ids)}, "frames": frames}
 
 
-def to_html(replay: dict) -> str:
+def to_html(replay: dict, out_dir: Optional[Path] = None, assets: Path = ASSETS) -> str:
+    """The viewer page with the replay inside. Pass the folder the page will be saved in so it can
+    find the card art; without it the page uses text cards."""
+    replay = dict(replay)
+    if out_dir is not None and (a := art(replay, assets)):
+        a["base"] = Path(os.path.relpath(assets, Path(out_dir).resolve())).as_posix()
+        replay["art"] = a
     data = json.dumps(replay, separators=(",", ":")).replace("</", "<\\/")
     return VIEWER.read_text().replace("/*REPLAY_DATA*/null", data)
 
@@ -116,7 +149,7 @@ def main(argv=None) -> None:
     rep = record(decks, (make_agent(args.p0), make_agent(args.p1)), args.seed, names=(args.p0, args.p1))
     out = Path(args.out or f"replays/{args.seed}.html")
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(to_html(rep))
+    out.write_text(to_html(rep, out.parent))
     result = "draw" if rep["winner"] is None else f"player {rep['winner']} ({rep['players'][rep['winner']]['leader']}) wins"
     print(f"{len(rep['frames'])} frames, {rep['turns']} turns, {result}: {out}")
     if args.open:

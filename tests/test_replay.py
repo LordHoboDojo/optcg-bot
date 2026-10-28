@@ -1,12 +1,18 @@
 """Replay recording. Run with: python3 -m unittest discover tests"""
 import json
 import re
+import tempfile
 import unittest
+from pathlib import Path
 
 from optcg.agents import GreedyAgent, RandomAgent
 from optcg.cardpool import GREEN_DECK, RED_DECK
 from optcg.play import play_game
-from optcg.replay import record, to_html
+from optcg.replay import ASSETS, art, record, to_html
+
+
+def embedded(html: str) -> dict:
+    return json.loads(re.search(r"const R = (\{.*?\});\n", html, re.S).group(1).replace("<\\/", "</"))
 
 
 class Replay(unittest.TestCase):
@@ -36,8 +42,27 @@ class Replay(unittest.TestCase):
     def test_html_embeds_the_replay(self):
         html = to_html(self.rep)
         self.assertNotIn("/*REPLAY_DATA*/null", html)
-        data = re.search(r"const R = (\{.*?\});\n", html, re.S).group(1)
-        self.assertEqual(json.loads(data.replace("<\\/", "</"))["seed"], 4)
+        self.assertEqual(embedded(html)["seed"], 4)
+        self.assertNotIn("art", embedded(html))  # no output folder, so no relative paths to the art
+
+    def test_no_art_without_the_assets_folder(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(art(self.rep, Path(d)), {})
+            self.assertNotIn("art", embedded(to_html(self.rep, Path(d), assets=Path(d))))
+
+
+@unittest.skipUnless((ASSETS / "Cards").is_dir(), "card art not installed")
+class Art(unittest.TestCase):
+    def test_paths_resolve_from_the_output_folder(self):
+        from optcg.carddb import official_decks
+        decks = official_decks()
+        rep = record((decks["(Blue) Rocks.D.Xebec"], decks["(Yellow) Charlotte Linlin"]),
+                     (GreedyAgent(), GreedyAgent()), seed=1)
+        out = ASSETS.parent / "replays"
+        a = embedded(to_html(rep, out))["art"]
+        self.assertEqual(set(a["cards"]), set(rep["cards"]))  # every official card has art
+        for path in [*a["cards"].values(), a["back"], a["don"]]:
+            self.assertTrue((out / a["base"] / path).is_file(), path)
 
 
 if __name__ == "__main__":
