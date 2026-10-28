@@ -8,8 +8,21 @@ Comprehensive Rules v1.2.1 (`rules/`). Pure Python 3.10, no dependencies.
 python3 -m optcg.play --deck0 "(Blue) Rocks.D.Xebec" --deck1 "(Yellow) Charlotte Linlin" --human 0 --p1 greedy
 python3 -m optcg.play --games 200 --p0 greedy --p1 random   # bot vs bot win rates
 python3 -m optcg.play --games 1 --log                        # print one game's log
-python3 -m unittest discover tests                           # rule tests
+python3 -m unittest discover tests                           # rule tests (.venv/bin/python also runs the PyTorch ones)
 ```
+
+## Watching a game
+
+`optcg.replay` records a game and writes it as one HTML file you open in a browser: a slideshow
+with one step per decision, showing both boards and hands, what happened since the last step,
+the options and the one chosen. Click a card for its text; arrow keys step, space plays.
+
+```bash
+python3 -m optcg.replay --p0 greedy --p1 greedy --seed 3 --open
+.venv/bin/python -m optcg.replay --p0 runs/ppo/latest.pt --p1 greedy --seed 3 --out replays/net.html --open
+```
+
+Decks default to Rocks vs Linlin (`--deck0`, `--deck1` change them). Replays go to `replays/`.
 
 ## Real cards
 
@@ -53,6 +66,8 @@ used at all.
 | `optcg/play.py` | Runs bot-vs-bot games and terminal play |
 | `optcg/human.py` | Terminal play against a bot |
 | `optcg/env.py` | Training environment and observation encoding |
+| `optcg/nn/` | PyTorch policy network, imitation and PPO training (needs PyTorch) |
+| `optcg/replay.py` | Records a game as an HTML slideshow (`replay_viewer.html` is the page) |
 | `tools/bench.py` | Games per second, with and without encoding |
 
 ## Driving the engine
@@ -104,6 +119,24 @@ An observation holds only what the learner may see, as plain lists of numbers:
 `card_index()` for an embedding) and `options` (one row per legal option, pointing at the card rows
 of the acting card and its target). Score each option row and pick one; the options change at every
 decision, so there is no fixed action space. Reward is +1 for a win, -1 for a loss, 0 otherwise.
+
+### With PyTorch
+
+The engine needs only the standard library; the neural bots in `optcg/nn/` need PyTorch, installed
+in the project venv (`python3 -m venv .venv && .venv/bin/pip install torch`).
+
+```bash
+.venv/bin/python -m optcg.nn.train imitate --out runs/imitate.pt          # copy GreedyAgent first
+.venv/bin/python -m optcg.nn.train ppo --init runs/imitate.pt --out runs/ppo --iters 200
+.venv/bin/python -m optcg.nn.train eval runs/ppo/latest.pt --vs greedy
+.venv/bin/python -m optcg.play --deck0 "(Blue) Rocks.D.Xebec" --deck1 "(Yellow) Charlotte Linlin" --human 0 --p1 runs/ppo/latest.pt
+```
+
+The network (`optcg/nn/model.py`) embeds each visible card, mixes them with one attention layer,
+and scores every legal option against the pooled state; a value head predicts the result.
+`ppo` plays games in parallel worker processes against GreedyAgent and frozen snapshots of
+itself, on both seats, and saves `latest.pt` every iteration and `iterNNNN.pt` at each evaluation.
+Checkpoints are tied to the card list in `data/cards.json`; retrain after refreshing it.
 
 `python3 tools/bench.py` measures speed. On one core the Rocks vs Linlin matchup runs about
 90 games/s bot-vs-bot and 40 games/s through the env with encoding (about 180 decisions a game).

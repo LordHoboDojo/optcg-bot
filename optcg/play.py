@@ -5,9 +5,11 @@
     python -m optcg.play --deck0 my_deck.txt --games 1 --log
     python -m optcg.play --list-decks
     python -m optcg.play --missing "(Red) Roronoa Zoro"
+    python -m optcg.play --deck0 "(Blue) Rocks.D.Xebec" --deck1 "(Yellow) Charlotte Linlin" --human 0 --p1 runs/ppo/latest.pt
 
 A deck is an official recommended deck name (or a unique part of one), a decklist
 file ('4xOP01-016' per line), or sample-red / sample-green.
+A bot is random, greedy, or a trained network checkpoint (.pt, needs PyTorch).
 """
 from __future__ import annotations
 
@@ -53,6 +55,15 @@ def play_human(decks: tuple[Deck, Deck], seat: int, bot: Agent, seed=None, human
     return game
 
 
+def make_agent(spec: str) -> Agent:
+    if spec in AGENTS:
+        return AGENTS[spec]()
+    if spec.endswith(".pt"):
+        from .nn.model import NeuralAgent, load
+        return NeuralAgent(load(spec))
+    raise SystemExit(f"unknown bot {spec!r}: use {', '.join(AGENTS)} or a .pt checkpoint")
+
+
 def resolve_deck(spec: str) -> Deck:
     if spec in SAMPLE_DECKS:
         return SAMPLE_DECKS[spec]
@@ -86,8 +97,8 @@ def show_missing(spec: str) -> None:
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--games", type=int, default=100)
-    ap.add_argument("--p0", choices=AGENTS, default="greedy", help="bot for player 0")
-    ap.add_argument("--p1", choices=AGENTS, default="random", help="bot for player 1")
+    ap.add_argument("--p0", default="greedy", help="bot for player 0: random, greedy or a .pt checkpoint")
+    ap.add_argument("--p1", default="random", help="bot for player 1: random, greedy or a .pt checkpoint")
     ap.add_argument("--deck0", default="sample-red")
     ap.add_argument("--deck1", default="sample-green")
     ap.add_argument("--seed", type=int, default=None, help="random seed (default: 0, or random with --human)")
@@ -104,12 +115,12 @@ def main(argv=None) -> None:
 
     decks = (resolve_deck(args.deck0), resolve_deck(args.deck1))
     if args.human is not None:
-        return play_human(decks, args.human, AGENTS[args.p1 if args.human == 0 else args.p0](), args.seed)
+        return play_human(decks, args.human, make_agent(args.p1 if args.human == 0 else args.p0), args.seed)
     args.seed = args.seed or 0
     results: Counter = Counter()
     turns = 0
     for i in range(args.games):
-        agents = (AGENTS[args.p0](), AGENTS[args.p1]())
+        agents = (make_agent(args.p0), make_agent(args.p1))
         g = play_game(decks, agents, seed=args.seed + i)
         results[g.winner] += 1
         turns += g.turn_number
