@@ -132,6 +132,17 @@ in the project venv (`python3 -m venv .venv && .venv/bin/pip install torch`).
 .venv/bin/python -m optcg.play --deck0 "(Blue) Rocks.D.Xebec" --deck1 "(Yellow) Charlotte Linlin" --human 0 --p1 runs/ppo/latest.pt
 ```
 
+A run without `--league` is locked to one matchup (Rocks vs Linlin by default), so the bot learns
+those two decks and nothing else. `--league` instead samples every pairing of the decks whose
+effect text is fully implemented, with the learner on either side, so one bot learns them all and
+far more cards see real play. Evaluations then break the win rate down per deck:
+
+```bash
+.venv/bin/python -m optcg.nn.train imitate --league --out runs/league_imitate.pt
+.venv/bin/python -m optcg.nn.train ppo --league --init runs/league_imitate.pt --out runs/league --iters 200
+.venv/bin/python -m optcg.nn.train eval runs/league/latest.pt --league --vs greedy
+```
+
 The network (`optcg/nn/model.py`) embeds each visible card, mixes them with one attention layer,
 and scores every legal option against the pooled state; a value head predicts the result.
 `ppo` plays games in parallel worker processes against GreedyAgent and frozen snapshots of
