@@ -15,6 +15,7 @@
   --pw: calc(var(--cw) * .62);                /* pile card */
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; }
 body { background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
   display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr) 340px;
@@ -35,24 +36,23 @@ header .result { margin-left: auto; font-weight: 650; padding: 3px 12px; border-
   overflow: hidden; isolation: isolate; background: #10141b; transition: border-color .2s, box-shadow .2s; }
 .side::before { content: ""; position: absolute; inset: 0; z-index: -1; opacity: .16;
   background: radial-gradient(120% 140% at 0% 100%, var(--c1) 0%, transparent 60%), radial-gradient(120% 140% at 100% 0%, var(--c2) 0%, transparent 60%); }
-.s1::before { transform: rotate(180deg); }
+.side.top::before { transform: rotate(180deg); }
 .side.s0 { --accent: var(--p0); } .side.s1 { --accent: var(--p1); }
 .side.turn { border-color: color-mix(in srgb, var(--accent) 70%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 28px -6px color-mix(in srgb, var(--accent) 45%, transparent); }
 
 .handrow { display: flex; align-items: flex-end; gap: 12px; min-height: calc(var(--hw) * 1.397); }
-.s1 .handrow { align-items: flex-start; }
+.top .handrow { align-items: flex-start; }
 .tag { flex: none; width: calc(var(--pw) * 2 + 18px); display: flex; flex-direction: column; gap: 2px; align-self: center; }
 .tag .who { color: var(--accent); font-weight: 700; font-size: 14px; line-height: 1.2; }
 .tag .agent { color: var(--dim); font-size: 12px; }
 .tag .turnflag { display: inline-block; margin-top: 3px; font-size: 11px; font-weight: 700; color: #0d1016; background: var(--accent); border-radius: 4px; padding: 0 6px; width: fit-content; white-space: nowrap; }
 .hand { display: flex; align-items: flex-end; min-width: 0; flex: 1; }
-.s1 .hand { align-items: flex-start; }
+.top .hand { align-items: flex-start; }
 .hand > .slot + .slot { margin-left: calc(var(--hw) * var(--overlap, -.08)); }
 .hand > .slot:hover { z-index: 2; }
 .hand .count { color: var(--dim); font-size: 12px; margin-left: 10px; align-self: center; white-space: nowrap; }
 
 .mat { display: flex; align-items: center; gap: 12px; }
-.s1 .mat { flex-direction: row; }
 .zone { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; }
 .zone .lbl { color: var(--dim); font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; white-space: nowrap; }
 .zone .lbl b { color: var(--text); font-size: 12px; }
@@ -117,6 +117,22 @@ header .result { margin-left: auto; font-weight: 650; padding: 3px 12px; border-
 .slot.new .card { animation: pop .35s ease-out; }
 @keyframes pop { from { transform: scale(.6); opacity: 0; } }
 .slot.rested.new .card { animation: none; }
+
+/* live play */
+.card.can { box-shadow: 0 0 0 2px var(--good), 0 0 14px -2px var(--good); cursor: pointer; }
+.card.focus { box-shadow: 0 0 0 3px var(--gold), 0 0 20px var(--gold); transform: translateY(-4px); }
+.card.aim { box-shadow: 0 0 0 3px var(--bad), 0 0 18px var(--bad); cursor: crosshair; animation: aim 1s ease-in-out infinite alternate; }
+@keyframes aim { to { box-shadow: 0 0 0 3px var(--bad), 0 0 6px var(--bad); } }
+.slot.rested .card.focus { transform: rotate(90deg) scale(.8); }
+.pile.don.can img { box-shadow: 0 0 0 2px var(--good), 0 0 14px -2px var(--good); cursor: pointer; }
+.pile.don.focus img { box-shadow: 0 0 0 3px var(--gold), 0 0 18px var(--gold); }
+.opts li.live { color: var(--text); background: var(--panel2); border-color: var(--line); cursor: pointer; display: flex; gap: 8px; }
+.opts li.live:hover { border-color: var(--good); background: #4cd17a14; }
+.opts li.live kbd { font: 11px/18px ui-monospace, monospace; color: var(--dim); min-width: 16px; text-align: center; }
+.yourmove { color: var(--good); }
+.hint { color: var(--faint); font-size: 12px; margin-top: 6px; }
+.livebtns { display: flex; gap: 6px; }
+.livebtns button { padding: 4px 10px; }
 
 /* middle strip */
 .mid { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 36px; flex-wrap: wrap; }
@@ -184,6 +200,7 @@ label { color: var(--dim); display: inline-flex; gap: 6px; align-items: center; 
   <h1 id="title"></h1>
   <span class="meta" id="meta"></span>
   <span class="result" id="result"></span>
+  <span class="livebtns" id="livebtns" hidden><button id="concede">Concede</button><button id="newgame">New game</button></span>
 </header>
 <main id="board"></main>
 <aside>
@@ -202,14 +219,17 @@ label { color: var(--dim); display: inline-flex; gap: 6px; align-items: center; 
   </div>
   <input type="range" id="timeline" min="0" value="0" aria-label="Timeline">
   <label>Speed <select id="speed"><option value="2500">Slow</option><option value="1300" selected>Normal</option><option value="600">Fast</option><option value="200">Very fast</option></select></label>
-  <label>Hands <select id="hands"><option value="both">Both</option><option value="0">P0 only</option><option value="1">P1 only</option><option value="none">Hidden</option></select></label>
+  <label id="handsLabel">Hands <select id="hands"><option value="both">Both</option><option value="0">P0 only</option><option value="1">P1 only</option><option value="none">Hidden</option></select></label>
   <label><input type="checkbox" id="eventsOnly" checked> Skip quiet steps</label>
-  <span class="keys">&larr; &rarr; step &middot; space play &middot; PgUp/PgDn turn</span>
+  <span class="keys" id="keys">&larr; &rarr; step &middot; space play &middot; PgUp/PgDn turn</span>
 </div>
 <div id="zoom"></div>
 <script>
 const R = /*REPLAY_DATA*/null;
 const F = R.frames, C = R.cards, A = R.art || null;
+// Live play (optcg.web): frames arrive from the server and the person in seat ME answers the last one.
+const LIVE = R.live || null, ME = LIVE ? LIVE.human : 0;
+let focus = null, busy = false;
 const COLORS = { red: "var(--red)", green: "var(--green)", blue: "var(--blue)", purple: "var(--purple)", black: "var(--black)", yellow: "var(--yellow)" };
 let i = 0, timer = null, prevUids = new Set(), selected = null;
 
@@ -238,6 +258,12 @@ function cardHTML(c, opts = {}) {
   if (f.d && f.d.hl.includes(c.u)) cls.push("picked");
   if (f.b && f.b[0] === c.u) cls.push("attacker");
   if (f.b && f.b[1] === c.u) cls.push("target");
+  if (myMove()) {
+    const acts = actions();
+    if (focus === c.u) cls.push("focus");
+    else if (focus !== null && acts.some(a => isFocused(a) && a.t === c.u)) cls.push("aim");
+    else if (focus === null && acts.some(a => a.c === c.u)) cls.push("can");
+  }
   const slot = ["slot"];
   if (opts.hand) slot.push("hand-card");
   if (c.r) slot.push("rested");
@@ -252,7 +278,7 @@ function cardHTML(c, opts = {}) {
     const pc = c.p === undefined ? "" : c.p > d.pow ? "up" : c.p < d.pow ? "down" : "";
     cap = `<div class="cap">${c.p !== undefined ? `<span class="pow ${pc}">${c.p}</span>` : ""}${c.n ? `<span class="donchip" title="${c.n} DON!! attached">+${c.n}</span>` : ""}</div>`;
   }
-  return `<div class="${slot.join(" ")}"><div class="cbox"><div class="${cls.join(" ")}" data-id="${esc(c.i)}">
+  return `<div class="${slot.join(" ")}"><div class="cbox"><div class="${cls.join(" ")}" data-id="${esc(c.i)}" data-u="${c.u}">
     ${textCard(d, cost)}${img(art(c.i))}${costBadge}${kws ? `<div class="kws">${kws}</div>` : ""}
   </div></div>${cap}</div>`;
 }
@@ -276,11 +302,11 @@ function lifeHTML(s) {
     <div class="lifestack" style="height:calc(var(--pw) * 1.397 + ${Math.max(0, n - 1) * step}px)">${cards || `<div class="pile empty"></div>`}</div></div>`;
 }
 
-function sideHTML(p, f) {
+function sideHTML(p, f, top) {
   const s = f.s[p], [da, dr, dd] = s.don;
   const mine = f.tp === p && f.t > 0;
 
-  const mode = $("hands").value, show = mode === "both" || mode === String(p);
+  const mode = $("hands").value, show = LIVE ? p === ME : mode === "both" || mode === String(p);
   const overlap = s.H.length > 7 ? -0.45 : s.H.length > 5 ? -0.25 : -0.06;
   const hand = `<div class="hand" style="--overlap:${overlap}">${s.H.map(c => show ? cardHTML(c, { hand: true }) : backHTML()).join("")}
     <span class="count">${s.H.length ? `${s.H.length} in hand` : "Empty hand"}</span></div>`;
@@ -294,7 +320,8 @@ function sideHTML(p, f) {
   const piles = `<div class="piles">
     ${pile(`Deck`, s.deck, img(asset(A && A.back)))}
     ${pile(`Trash`, s.trash.length, topTrash ? (img(art(topTrash)) || `<div class="face" style="background:#2a2f3a"></div>`) : "", "click", `data-trash="${p}"`)}
-    ${pile(`DON!!`, da, img(asset(A && A.don)), "don", `title="${da} active DON!!"`)}
+    ${pile(`DON!!`, da, img(asset(A && A.don)), `don ${p === ME && myMove() ? (focus === "don" ? "focus" : actions().some(a => a.k === "give_don") ? "can" : "") : ""}`,
+      `title="${da} active DON!!" ${p === ME ? "data-don" : ""}`)}
     ${pile(`Rested`, dr, img(asset(A && A.don)), "don rested", `title="${dr} rested DON!!, ${dd} left in the DON!! deck"`)}
   </div>`;
   const mat = `<div class="mat">${lifeHTML(s)}<div class="divider"></div>
@@ -304,7 +331,7 @@ function sideHTML(p, f) {
 
   const cols = C[R.players[p].id].col.map(c => COLORS[c] || "#888");
   const wash = `--c1:${cols[0]};--c2:${cols[cols.length - 1]}`;
-  return `<section class="side s${p} ${mine ? "turn" : ""}" style="${wash}">${p === 1 ? handrow + mat : mat + handrow}</section>`;
+  return `<section class="side s${p} ${top ? "top" : ""} ${mine ? "turn" : ""}" style="${wash}">${top ? handrow + mat : mat + handrow}</section>`;
 }
 
 function findCard(f, u) { for (const s of f.s) for (const c of [s.L, ...s.C]) if (c.u === u) return c; }
@@ -316,7 +343,7 @@ function render() {
     const a = findCard(f, f.b[0]), t = findCard(f, f.b[1]);
     if (a && t) mid += `<span class="battle">${img(art(a.i))}${esc(C[a.i].n)} <b>${a.p}</b> <span class="arrow">&#x27F6;</span> ${img(art(t.i))}${esc(C[t.i].n)} <b>${t.p}</b></span>`;
   }
-  $("board").innerHTML = sideHTML(1, f) + `<div class="mid">${mid}</div>` + sideHTML(0, f);
+  $("board").innerHTML = sideHTML(1 - ME, f, true) + `<div class="mid">${mid}</div>` + sideHTML(ME, f, false);
 
   $("step").innerHTML = `${f.t ? `Turn ${f.t}` : "Setup"}<small>Step ${i + 1} of ${F.length}</small>`;
   const lines = f.log.map(l => {
@@ -327,7 +354,24 @@ function render() {
   });
   $("events").innerHTML = lines.join("") || `<li class="none">Nothing new since the last step</li>`;
 
-  if (f.d) {
+  if (myMove()) {
+    const d = f.d, own = focus === null ? null : actions().filter(isFocused).map(a => a.n);
+    const shown = d.o.map((o, k) => ({ o, k })).filter(x => !own || own.includes(x.k));
+    $("decision").innerHTML = `<h2 class="yourmove">Your move</h2><div class="q">${esc(d.q || d.kind)}</div>
+      <ul class="opts">${shown.map(({ o, k }) => `<li class="live" data-opt="${k}"><kbd>${k < 9 ? k + 1 : ""}</kbd><span>${esc(o)}</span></li>`).join("")}
+      ${own ? `<li class="more" id="unfocus">Show all ${d.o.length} options</li>` : ""}</ul>
+      <div class="hint">${busy ? "Waiting for the bot&hellip;" : focus !== null ? "Click a red target, or an option above. Esc to cancel."
+        : "Click a glowing card, or an option. Number keys pick options."}</div>`;
+    const u = $("unfocus"); if (u) u.onclick = () => { focus = null; render(); };
+  } else if (f.d && LIVE && f.d.pl !== ME) {
+    const d = f.d;
+    $("decision").innerHTML = `<h2>Bot &middot; ${pname(d.pl)}</h2><div class="q">${esc(d.q || d.kind)}</div>
+      <ul class="opts"><li class="chosen">${d.o.length ? esc(d.o[0]) : "<i>(hidden choice)</i>"}</li></ul>
+      <div class="hint">out of ${d.n} option${d.n === 1 ? "" : "s"}${i < F.length - 1 ? " &middot; End jumps to now" : ""}</div>`;
+  } else if (f.d && LIVE) {
+    $("decision").innerHTML = `<h2>You chose</h2><ul class="opts"><li class="chosen">${esc(f.d.o[f.d.pick] ?? "")}</li></ul>
+      <div class="hint">End jumps to now</div>`;
+  } else if (f.d) {
     const d = f.d;
     const MAX = 8;
     let opts = d.o.map((o, k) => ({ o, k }));
@@ -341,7 +385,8 @@ function render() {
     const m = $("moreOpts"); if (m) m.onclick = () => { showAllOpts = true; render(); };
   } else {
     const w = R.winner;
-    $("decision").innerHTML = `<h2>Game over</h2><div class="step">${w === null ? "Draw" : pname(w) + " wins"}</div>`;
+    const verdict = LIVE ? (w === null ? "Draw" : w === ME ? "You win!" : "You lose") : w === null ? "Draw" : pname(w) + " wins";
+    $("decision").innerHTML = `<h2>Game over</h2><div class="step">${verdict}</div>`;
   }
   renderDetail();
   $("timeline").value = i;
@@ -373,6 +418,60 @@ function renderDetail() {
   $("detail").innerHTML = `<h2>Card</h2><div class="detail">${img(art(selected.id), "big")}${cardInfo(selected.id)}</div>`;
 }
 
+// ---- live play
+function myMove() { const f = F[i]; return !!(LIVE && !R.over && i === F.length - 1 && f && f.d && f.d.pick === null && f.d.pl === ME); }
+function actions() { return F[i].d.act.map(([k, c, t], n) => ({ k, c, t, n })); }
+// An option belongs to the focused card (or to the DON!! pile, for giving DON!!).
+function isFocused(a) { return focus === "don" ? a.k === "give_don" : a.c === focus; }
+
+function clickCard(u) {
+  const acts = actions();
+  if (focus !== null && u !== focus) {
+    const hit = acts.filter(a => isFocused(a) && a.t === u);
+    if (hit.length === 1) { choose(hit[0].n); return true; }
+  }
+  if (u === focus) { focus = null; render(); return true; }
+  const own = u === "don" ? acts.filter(a => a.k === "give_don") : acts.filter(a => a.c === u);
+  // One thing to do with this card: do it, except an attack, which always asks for its target.
+  if (own.length === 1 && u !== "don" && (own[0].t === null || own[0].k !== "attack")) { choose(own[0].n); return true; }
+  if (own.length) { focus = u; render(); return true; }
+  if (focus !== null) { focus = null; render(); }
+  return false;
+}
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return r.json();
+}
+
+function apply(st, watch) {
+  F.splice(st.from, F.length - st.from, ...st.frames);
+  Object.assign(R, { winner: st.winner, turns: st.turns, first: st.first, over: st.over });
+  header();
+  $("livebtns").hidden = false;
+  $("concede").hidden = R.over;
+  // Step through what the bot did since our last move, then stop on the new decision.
+  if (watch && F.length - 1 > st.from + 1) { go(st.from + 1); play(true); }
+  else { play(false); go(F.length - 1); }
+}
+
+async function choose(k) {
+  if (busy) return;
+  busy = true; focus = null; render();
+  try { apply(await api("/api/act", { frame: i, option: k }), true); }
+  finally { busy = false; render(); }
+}
+
+async function startLive() {
+  $("handsLabel").hidden = true;
+  document.title = "OPTCG Play";
+  $("speed").value = "600";
+  $("keys").innerHTML = "&larr; &rarr; step back through the game &middot; End: back to now";
+  $("concede").onclick = async () => { if (confirm("Concede this game?")) apply(await api("/api/concede", {}), false); };
+  $("newgame").onclick = async () => { if (R.over || confirm("Abandon this game and start a new one?")) { await api("/api/new", {}); location.reload(); } };
+  apply(await api("/api/state?from=0"), false);
+}
+
 // Hover zoom
 const zoom = $("zoom");
 document.addEventListener("mouseover", e => {
@@ -393,7 +492,7 @@ document.addEventListener("mousemove", e => {
 document.addEventListener("mouseleave", () => zoom.style.display = "none");
 
 const quiet = k => F[k].log.length === 0 && k !== F.length - 1 && k !== 0;
-function go(k) { const n = Math.max(0, Math.min(F.length - 1, k)); if (n !== i) showAllOpts = false; i = n; render(); }
+function go(k) { const n = Math.max(0, Math.min(F.length - 1, k)); if (n !== i) { showAllOpts = false; focus = null; } i = n; render(); }
 function step(dir) {
   let k = i + dir;
   if ($("eventsOnly").checked) while (k > 0 && k < F.length - 1 && quiet(k)) k += dir;
@@ -412,10 +511,16 @@ function play(on) {
   $("play").innerHTML = timer ? "&#x23F8; Pause" : "&#x25B6; Play";
 }
 
-$("title").innerHTML = `${pname(0)}<span class="vs">vs</span>${pname(1)}`;
-$("meta").textContent = `seed ${R.seed}${R.first !== undefined && R.first !== null ? ` · P${R.first} went first` : ""}`;
-$("result").innerHTML = R.winner === null ? "Draw" : `${pname(R.winner)} wins in ${R.turns} turns`;
-$("timeline").max = F.length - 1;
+function header() {
+  $("title").innerHTML = `${pname(0)}<span class="vs">vs</span>${pname(1)}`;
+  const started = R.first !== undefined && R.first !== null && F.some(f => f.t > 0);
+  $("meta").textContent = `seed ${R.seed}${started ? ` · P${R.first} went first` : ""}`;
+  const over = !LIVE || R.over;
+  $("result").innerHTML = !over ? `You are ${pname(ME)}`
+    : R.winner === null ? "Draw" : LIVE ? `${R.winner === ME ? "You win" : "You lose"} in ${R.turns} turns` : `${pname(R.winner)} wins in ${R.turns} turns`;
+  $("timeline").max = Math.max(0, F.length - 1);
+}
+header();
 $("timeline").oninput = e => go(+e.target.value);
 $("prev").onclick = () => step(-1);
 $("next").onclick = () => step(1);
@@ -425,6 +530,10 @@ $("play").onclick = () => play(!timer);
 $("speed").onchange = () => timer && play(true);
 $("hands").onchange = render;
 document.addEventListener("click", e => {
+  const opt = e.target.closest("[data-opt]");
+  if (opt && myMove()) return choose(+opt.dataset.opt);
+  const mine = e.target.closest("[data-u], [data-don]");
+  if (mine && myMove() && clickCard(mine.dataset.don !== undefined ? "don" : +mine.dataset.u)) return;
   const el = e.target.closest("[data-id], [data-trash]");
   if (!el) return;
   selected = el.dataset.trash !== undefined ? { trash: +el.dataset.trash } : { id: el.dataset.id };
@@ -432,13 +541,15 @@ document.addEventListener("click", e => {
 });
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT" && e.target.type !== "range" && e.target.type !== "checkbox") return;
+  if (myMove() && /^[1-9]$/.test(e.key) && +e.key <= F[i].d.o.length) { e.preventDefault(); return choose(+e.key - 1); }
+  if (e.key === "Escape" && focus !== null) { focus = null; return render(); }
   const k = { ArrowRight: () => step(1), ArrowLeft: () => step(-1), " ": () => play(!timer), Home: () => go(0), End: () => go(F.length - 1),
     PageDown: () => jumpTurn(1), PageUp: () => jumpTurn(-1) }[e.key];
   if (k) { e.preventDefault(); k(); }
 });
 // Fetch all the art once so stepping never shows a half-loaded board.
 if (A) for (const id in A.cards) new Image().src = art(id);
-render();
+if (LIVE) startLive(); else render();
 </script>
 </body>
 </html>

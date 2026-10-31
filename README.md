@@ -29,6 +29,26 @@ python3 -m optcg.replay --p0 greedy --p1 greedy --seed 3 --open
 
 Decks default to Rocks vs Linlin (`--deck0`, `--deck1` change them). Replays go to `replays/`.
 
+## Playing in your browser
+
+`optcg.web` runs a game on your machine and shows it on the same board as the replays, with
+you in one seat and a bot in the other:
+
+```bash
+.venv/bin/python -m optcg.web --open
+.venv/bin/python -m optcg.web --deck0 "(Black) Monkey.D.Luffy" --deck1 "(Blue) Rocks.D.Xebec" --bot runs/league/latest.pt --open
+```
+
+On your decisions the cards you can use glow green. Click a hand card to play it or use it as a Counter, a Character
+to block with it, or an attacker and then its target (it pulses red). Click the
+DON!! pile and then a card to give it DON!!. Every option is also a button in the side panel,
+and number keys pick them. After each of your moves the bot's turn plays back step by step;
+press End to skip to the present. You can step back through the whole game at any time.
+
+You only see what your seat may see: the bot's hand is face down, and of each bot decision
+only the option it picked. `--human 1` takes the other seat, `--seed` fixes the shuffle, and
+the page has Concede and New game buttons.
+
 ## Real cards
 
 `data/cards.json` holds every English card (2,850) and `data/decks.json` the official
@@ -73,6 +93,7 @@ used at all.
 | `optcg/env.py` | Training environment and observation encoding |
 | `optcg/nn/` | PyTorch policy network, imitation and PPO training (needs PyTorch) |
 | `optcg/replay.py` | Records a game as an HTML slideshow (`replay_viewer.html` is the page) |
+| `optcg/web.py` | Local server for playing a bot in the browser, on the replay page |
 | `tools/bench.py` | Games per second, with and without encoding |
 
 ## Driving the engine

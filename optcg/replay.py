@@ -130,8 +130,13 @@ def to_html(replay: dict, out_dir: Optional[Path] = None, assets: Path = ASSETS)
     if out_dir is not None and (a := art(replay, assets)):
         a["base"] = Path(os.path.relpath(assets, Path(out_dir).resolve())).as_posix()
         replay["art"] = a
-    data = json.dumps(replay, separators=(",", ":")).replace("</", "<\\/")
-    return VIEWER.read_text().replace("/*REPLAY_DATA*/null", data)
+    return page(replay)
+
+
+def page(data: dict) -> str:
+    """The viewer with `data` inside it."""
+    blob = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
+    return VIEWER.read_text().replace("/*REPLAY_DATA*/null", blob)
 
 
 def main(argv=None) -> None:
