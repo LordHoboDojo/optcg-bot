@@ -80,12 +80,12 @@ class Session:
         f = _frame(self.g, self.seen)
         self.seen = len(self.g.log)
         theirs = f["s"][1 - self.human]
-        theirs["H"] = [{} for _ in theirs["H"]]  # face down: count only
+        theirs["H"] = [c if c.get("rv") else {} for c in theirs["H"]]  # face down unless it was shown
         return f
 
     def _visible(self, f: dict) -> set[int]:
-        mine = f["s"][self.human]["H"]
-        return {c["u"] for s in f["s"] for c in [s["L"], s["S"], *s["C"]] if c} | {c["u"] for c in mine}
+        hands = [c for s in f["s"] for c in s["H"] if c]
+        return {c["u"] for s in f["s"] for c in [s["L"], s["S"], *s["C"]] if c} | {c["u"] for c in hands}
 
     def _advance(self) -> None:
         """Let the bot play until it's the person's turn to decide, or the game ends."""

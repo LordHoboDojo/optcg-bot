@@ -994,8 +994,15 @@ impl<'a> Eng<'a> {
                 let top: Vec<Uid> = deck[deck.len().saturating_sub(*n)..].iter().rev().copied().collect();
                 let cands = top.iter().copied().filter(|&c| self.filter_ok(pred, c)).collect();
                 let picks = self.choose_cards(me, cands, *k, "Add to hand", false)?;
+                if !picks.is_empty() {
+                    // a card going from the deck to the hand is shown to the opponent (11-2)
+                    let names: Vec<&str> = picks.iter().map(|&c| self.name(c)).collect();
+                    let which = if picks.len() == 1 { "it" } else { "them" };
+                    self.log(|| format!("Player {me} reveals {} and adds {which} to their hand", names.join(", ")));
+                }
                 for &c in &picks {
                     self.mv(c, Zone::Hand);
+                    self.cm(c).revealed = true;
                 }
                 let rest: Vec<Uid> = top.into_iter().filter(|c| !picks.contains(c)).collect();
                 if *to_trash {

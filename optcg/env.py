@@ -102,8 +102,8 @@ def encode(g: Game, d: Decision) -> dict:
         for c in ps.life:
             if c.face_up:
                 add(c, "life")
-        if p == me:
-            for c in ps.hand:
+        for c in ps.hand:
+            if p == me or c.revealed:  # the opponent's hand only where a card was shown
                 add(c, "hand")
 
     # cards an effect lets this player see (deck searches, revealed cards) appear only in options

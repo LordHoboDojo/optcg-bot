@@ -82,6 +82,8 @@ def _card(g: Game, c: Card) -> dict:
         if kws:
             out["k"] = kws
     elif c.zone == "hand":
+        if c.revealed:
+            out["rv"] = 1
         out["c"] = g.cost(c)
         if c.category == Category.CHARACTER:
             out["p"] = c.d.power

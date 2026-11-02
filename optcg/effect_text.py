@@ -1176,8 +1176,12 @@ def t_look(m):
         deck = g.players[src.owner].deck
         top = deck[-n:][::-1]
         picks = yield from g.choose_cards(src.owner, [c for c in top if pred(c)], k, "Add to hand")
+        if picks:  # a card going from the deck to the hand is shown to the opponent (11-2)
+            g._log(f"Player {src.owner} reveals {', '.join(c.name for c in picks)} and adds "
+                   f"{'it' if len(picks) == 1 else 'them'} to their hand")
         for c in picks:
             g.move(c, "hand")
+            c.revealed = True
         rest = [c for c in top if c not in picks]
         if to_trash:
             for c in rest:

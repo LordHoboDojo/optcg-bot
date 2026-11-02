@@ -106,8 +106,9 @@ pub fn encode(e: &Eng, d: &Decision) -> Obs {
                 add(u, Some(Zone::Life), &mut rows, &mut row_of);
             }
         }
-        if p == me {
-            for &u in &ps.hand {
+        for &u in &ps.hand {
+            if p == me || e.c(u).revealed {
+                // the opponent's hand only where a card was shown
                 add(u, Some(Zone::Hand), &mut rows, &mut row_of);
             }
         }

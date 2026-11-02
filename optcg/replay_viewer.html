@@ -266,7 +266,7 @@ function layout(f) {
     if (s.trash.length) { const [x, y] = at(...POS.trash);
       add({ key: `trash${p}`, id: s.trash[s.trash.length - 1], pile: s.trash.length, p, x, y, s: .75, z: 4, zone: "trash" }); }
     // hands: yours fanned along the bottom edge, the opponent's peeking in at the top
-    const hn = s.H.length, faceUp = s.H.some(c => c.u !== undefined);
+    const hn = s.H.length, faceUp = hn > 0 && s.H.every(c => c.u !== undefined);  // replays show both hands
     const scale = mine(p) ? 1.15 : (faceUp ? .78 : .6);
     const spread = mine(p) ? 600 : 460, pitch = mine(p) ? 112 : (faceUp ? 76 : 60);
     const hstep = hn > 1 ? Math.min(pitch, spread / (hn - 1)) : 0;
@@ -340,7 +340,7 @@ function render(animate = true) {
     const ctr = m.startsWith("ctr:") ? +m.slice(4) : 0;
     el.querySelector(".badges").innerHTML = badgesHTML(it, ctr);
     const cls = ["card"];
-    if (it.zone === "hand") cls.push("hand");
+    if (it.zone === "hand" && mine(it.p)) cls.push("hand");
     if (it.zone === "char" || it.zone === "leader" || it.zone === "stage") cls.push("field");
     if (it.don) cls.push("don");
     if (it.flip) cls.push("flip");
@@ -847,6 +847,8 @@ function playFrom(k, end, speed = 750) {
     const k = playing.k++;
     go(k);
     if (F[k].log.length) toast(F[k].log);
+    const shown = F[k].log.find(l => / reveals /.test(l));   // a card the bot revealed: show it big
+    if (shown) previewNamed(shown.replace(/^.* reveals /, ""));
     timer = setTimeout(tick, quiet(k) ? 120 : speed);
   };
   tick();

@@ -400,6 +400,7 @@ impl<'a> Eng<'a> {
             played_turn: -1,
             mods: SmallVec::new(),
             opt_used: SmallVec::new(),
+            revealed: false,
         });
         if zone == Zone::Leader {
             self.psm(owner).leader = uid;
@@ -769,6 +770,8 @@ impl<'a> Eng<'a> {
                 self.resolve(card, trig[0])?;
                 if self.c(card).zone.is_none() {
                     self.mv(card, Zone::Trash);
+                } else if self.c(card).zone == Some(Zone::Hand) {
+                    self.cm(card).revealed = true; // e.g. "add this card to your hand": everyone saw it
                 }
             } else {
                 self.mv(card, Zone::Hand);

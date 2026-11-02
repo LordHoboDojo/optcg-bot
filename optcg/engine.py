@@ -546,6 +546,8 @@ class Game:
                 yield from self._resolve(card, trig[0])
                 if card.zone is None:
                     self.move(card, "trash")
+                elif card.zone == "hand":  # e.g. "add this card to your hand": everyone saw it
+                    card.revealed = True
             else:
                 self.move(card, "hand")
                 self._log(f"Player {player} adds a Life card to hand ({len(ps.life)} left)")

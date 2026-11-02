@@ -174,6 +174,7 @@ class Card:
         self.played_turn = -1
         self.mods: list[Mod] = []
         self.opt_used: dict[int, int] = {}  # effect index -> turn number ([Once Per Turn])
+        self.revealed = False  # in hand after being shown to the opponent (a search, a [Trigger])
 
     @property
     def name(self) -> str:
@@ -190,6 +191,7 @@ class Card:
         self.played_turn = -1
         self.mods = []
         self.opt_used = {}
+        self.revealed = False
 
     def __repr__(self) -> str:
         return f"<{self.d.name}#{self.uid} p{self.owner} {self.zone}>"

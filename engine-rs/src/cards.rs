@@ -277,6 +277,8 @@ pub struct Card {
     pub mods: SmallVec<[Mod; 2]>,
     /// [Once Per Turn]: (effect index or group, turn number).
     pub opt_used: SmallVec<[(usize, i32); 2]>,
+    /// In hand after being shown to the opponent (a search, a [Trigger]).
+    pub revealed: bool,
 }
 
 impl Card {
@@ -287,6 +289,7 @@ impl Card {
         self.played_turn = -1;
         self.mods.clear();
         self.opt_used.clear();
+        self.revealed = false;
     }
     pub fn opt_turn(&self, key: usize) -> Option<i32> {
         self.opt_used.iter().find(|(k, _)| *k == key).map(|(_, t)| *t)
