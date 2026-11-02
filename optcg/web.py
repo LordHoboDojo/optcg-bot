@@ -2,6 +2,7 @@
 
     .venv/bin/python -m optcg.web --open
     .venv/bin/python -m optcg.web --deck0 "(Black) Monkey.D.Luffy" --deck1 "(Blue) Rocks.D.Xebec" --bot runs/league/latest.pt --open
+    .venv/bin/python -m optcg.web --bot mcts:runs/rocks/latest.pt --open    # the network plus search
 
 A small local server runs the game. The page shows only what your seat may see: the bot's hand
 stays face down and, of its decisions, only the option it picked. Every step of the game is kept,
@@ -38,6 +39,12 @@ class Session:
         self.seed = random.randrange(1 << 30) if seed is None else seed
         self.bot = make_agent(bot)
         self.g = Game(decks, seed=self.seed)
+        # A bot that searches plays on the Rust engine: a copy of the game kept in step with
+        # this one (both engines play the same game from the same seed and answers).
+        self.rg = None
+        if getattr(self.bot, "rust_only", False):
+            from .env import rust_game
+            self.rg = rust_game(decks, self.seed)
         self.frames: list[dict] = []
         self.seen = 0
         self._advance()
@@ -68,8 +75,15 @@ class Session:
             raise ValueError("no such option")
         a = d.options[option]
         self.frames[frame]["d"].update(pick=option, hl=[u for u in (a.card, a.target) if u is not None])
-        g.step(a)
+        self._step(option)
         self._advance()
+
+    def _step(self, option: int) -> None:
+        self.g.step(self.g.pending.options[option])
+        if self.rg is not None:
+            self.rg.step(option)
+            if self.rg.num_options() != (len(self.g.pending.options) if self.g.pending else 0):
+                raise RuntimeError("the Rust copy of the game no longer matches")
 
     def concede(self) -> None:
         if not self.g.over:
@@ -103,7 +117,7 @@ class Session:
                           "act": [[o.kind, o.card, o.target, o.index, cid(o.card), cid(o.target)] for o in d.options]}
                 self.frames.append(f)
                 return
-            a = self.bot.act(g, d)
+            a = d.options[self.bot.pick(self.rg)] if self.rg is not None else self.bot.act(g, d)
             # Only the pick is shown: the other options would give away the bot's hand.
             # Card ids (uids) are kept only for cards the person can already see.
             shown = self._visible(f)
@@ -111,7 +125,7 @@ class Session:
                       "pick": None if d.kind in SECRET_KINDS else 0,
                       "hl": [u for u in (a.card, a.target) if u is not None and u in shown]}
             self.frames.append(f)
-            g.step(a)
+            self._step(d.options.index(a))
         raise RuntimeError(f"game did not finish in {MAX_STEPS} steps")
 
 
@@ -183,7 +197,8 @@ def main(argv=None) -> None:
     ap.add_argument("--deck0", default="rocks", help="default: your list in decks/rocks.txt")
     ap.add_argument("--deck1", default="(Yellow) Charlotte Linlin")
     ap.add_argument("--human", type=int, choices=(0, 1), default=0, help="your seat (default 0, deck0)")
-    ap.add_argument("--bot", default="greedy", help="random, greedy or a .pt checkpoint")
+    ap.add_argument("--bot", default="greedy", help="random, greedy, a .pt checkpoint, or mcts:<checkpoint> "
+                                                    "for the network with search")
     ap.add_argument("--seed", type=int)
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--open", action="store_true", help="open the game in your browser")

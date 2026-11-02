@@ -1479,6 +1479,35 @@ impl<'a> Eng<'a> {
 }
 
 /// Everything `player` can see, as numbers (for checking a reshuffle didn't change it).
+/// Cards `player` can't see: both decks, the opponent's hand except revealed cards, face-down
+/// Life. The cards in `player`'s own pending choice are seen.
+fn hidden(s: &State, pending: Option<&Decision>, player: u8) -> Vec<bool> {
+    let mut h = vec![false; s.cards.len()];
+    for (p, ps) in s.players.iter().enumerate() {
+        for &u in ps.deck.iter() {
+            h[u as usize] = true;
+        }
+        if p as u8 != player {
+            for &u in ps.hand.iter() {
+                h[u as usize] = !s.cards[u as usize].revealed;
+            }
+        }
+        for &u in ps.life.iter() {
+            if !s.cards[u as usize].face_up {
+                h[u as usize] = true;
+            }
+        }
+    }
+    if let Some(d) = pending.filter(|d| d.player == player) {
+        for o in &d.options {
+            for u in [o.card, o.target].into_iter().flatten() {
+                h[u as usize] = false;
+            }
+        }
+    }
+    h
+}
+
 fn public_view(s: &State, pending: Option<&Decision>, player: u8) -> Vec<i64> {
     let mut v: Vec<i64> = vec![s.turn_number as i64, s.turn_player as i64, s.phase as i64];
     if let Some(b) = &s.battle {
@@ -1713,7 +1742,8 @@ impl Game {
 
     /// For search with hidden information: reshuffle the cards `player` can't see among the
     /// places they are in, each owner's cards among themselves (the opponent's hand, deck and
-    /// face-down Life; your own deck and face-down Life). What `player` knows from earlier
+    /// face-down Life; your own deck and face-down Life). Revealed hand cards and the cards in
+    /// `player`'s own pending choice (a deck search, say) stay put. What `player` knows from earlier
     /// (cards they looked at and put back) is not tracked, and future random events keep the
     /// true random state.
     ///
@@ -1724,28 +1754,7 @@ impl Game {
         if self.over {
             return false;
         }
-        let hidden = |s: &State| -> Vec<bool> {
-            let mut h = vec![false; s.cards.len()];
-            for (p, ps) in s.players.iter().enumerate() {
-                let mine = p as u8 == player;
-                let mut zones: Vec<&[Uid]> = vec![&ps.deck];
-                if !mine {
-                    zones.push(&ps.hand);
-                }
-                for z in zones {
-                    for &u in z {
-                        h[u as usize] = true;
-                    }
-                }
-                for &u in &ps.life {
-                    if !s.cards[u as usize].face_up {
-                        h[u as usize] = true;
-                    }
-                }
-            }
-            h
-        };
-        let (now, then) = (hidden(&self.state), hidden(&self.checkpoint));
+        let (now, then) = (hidden(&self.state, self.pending.as_ref(), player), hidden(&self.checkpoint, None, player));
         let saved = (self.checkpoint.clone(), self.state.clone(), self.pending.clone(), self.log.len());
         let mut rng = PyRandom::new(seed);
         for owner in 0..2u8 {
@@ -1802,6 +1811,20 @@ impl Game {
 
     fn public_view(&self, player: u8) -> Vec<i64> {
         public_view(&self.state, self.pending.as_ref(), player)
+    }
+
+    /// A name for each pending option that means the same thing in every determinization
+    /// `player` might search: (kind, card, target, index), where a card `player` can see is
+    /// its uid and a hidden one is 1_000_000 + its card number. -1 for none.
+    pub fn option_keys(&self, player: u8) -> Vec<(u8, i64, i64, i64)> {
+        let Some(d) = &self.pending else { return vec![] };
+        let h = hidden(&self.state, Some(d), player);
+        let key = |u: Option<Uid>| match u {
+            None => -1,
+            Some(u) if h[u as usize] => 1_000_000 + self.state.cards[u as usize].def as i64,
+            Some(u) => u as i64,
+        };
+        d.options.iter().map(|o| (o.kind as u8, key(o.card), key(o.target), o.index.map_or(-1, |i| i as i64))).collect()
     }
 
     /// Read-only engine access to the current state (power, cost, describe, ...).

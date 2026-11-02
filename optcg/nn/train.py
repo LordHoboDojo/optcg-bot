@@ -5,9 +5,14 @@
     .venv/bin/python -m optcg.nn.train eval runs/ppo/latest.pt --vs greedy --games 400
 
 imitate  learns to copy GreedyAgent's choices (a fast, sane starting point)
-ppo      self-play actor-critic (PPO): the bot plays games against GreedyAgent and its own earlier
-         snapshots, and learns from wins and losses. Decks default to Rocks vs Linlin; the bot
-         plays both seats, so it learns both decks.
+ppo      self-play actor-critic (PPO): the bot plays games against its own earlier snapshots and,
+         for --greedy-share of them, GreedyAgent, and learns from wins and losses. Decks default
+         to your Rocks list vs Linlin; the bot plays both seats, so it learns both decks.
+         --reference judges each evaluation head-to-head against a fixed checkpoint, and
+         best.pt keeps the checkpoint that did best (beating GreedyAgent alone says little
+         once a bot wins most of those games):
+
+    .venv/bin/python -m optcg.nn.train ppo --init runs/ppo/latest.pt --reference runs/ppo/latest.pt --out runs/selfplay
 eval     win rate of a checkpoint against an agent (or another checkpoint), both seats
 
 --league replaces the single matchup with every pairing of the decks whose effect text is fully
@@ -39,7 +44,7 @@ from ..env import Env, encode, encode_rust, play_rust, rust_available, rust_game
 from ..play import play_game, resolve_deck
 from .model import NeuralAgent, PolicyNet, collate, load, save
 
-DECKS = ("(Blue) Rocks.D.Xebec", "(Yellow) Charlotte Linlin")
+DECKS = ("rocks", "(Yellow) Charlotte Linlin")
 
 
 def covered_decks() -> tuple[str, ...]:
@@ -221,6 +226,16 @@ def _split(seeds, n):
     return [seeds[i::n] for i in range(n) if seeds[i::n]]
 
 
+def _opponents(snapshots: list, keep: int, greedy_share: float) -> list:
+    """The opponent pool, one entry picked per game: the last `keep` snapshots of the learner,
+    plus GreedyAgent repeated so it gets about `greedy_share` of the games."""
+    pool = snapshots[-keep:]
+    if not pool:
+        return ["greedy"]
+    n = round(greedy_share / (1 - greedy_share) * len(pool))
+    return ["greedy"] * max(int(greedy_share > 0), n) + pool
+
+
 def _pool(workers):
     return mp.get_context("spawn").Pool(workers, initializer=_init_worker)
 
@@ -311,6 +326,8 @@ def _advantages(ep, gamma, lam):
 
 
 def ppo(args) -> None:
+    if not 0 <= args.greedy_share < 1:
+        raise SystemExit("--greedy-share must be at least 0 and below 1")
     pairings = matchups(args)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -320,13 +337,20 @@ def ppo(args) -> None:
     net = (load(args.init) if args.init else PolicyNet(args.hidden)).to(device)
     hidden = net.hidden
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
-    snapshots: list[dict] = []
+    snapshots: list[dict] = [_cpu_state(net)] if args.init else []  # self-play from the start
+    reference = None
+    if args.reference:
+        ref = load(args.reference)
+        if ref.hidden != hidden:
+            raise SystemExit(f"--reference has hidden size {ref.hidden}, the learner {hidden}")
+        reference = ref.state_dict()
+    best = -1.0
     seed = args.seed
     with _pool(args.workers) as pool:
         for it in range(1, args.iters + 1):
             t = time.time()
             state = _cpu_state(net)
-            opponents = ["greedy"] * max(1, len(snapshots)) + snapshots[-args.keep:]
+            opponents = _opponents(snapshots, args.keep, args.greedy_share)
             seeds = list(range(seed, seed + args.games))
             seed += args.games
             episodes = [e for part in pool.map(_rollouts, [(pairings, state, hidden, opponents, s, args.engine,
@@ -385,7 +409,21 @@ def ppo(args) -> None:
                       flush=True)
                 if len(pairings) > 1:
                     _report(by_deck, indent="      ")
-                save(net, str(out / f"iter{it:04d}.pt"), matchups=pairings, iteration=it, eval_vs_greedy=win)
+                meta = dict(matchups=pairings, iteration=it, eval_vs_greedy=win)
+                score = win
+                if reference is not None:
+                    score, draw, by_deck = evaluate(pool, args.workers, pairings, _cpu_state(net), reference,
+                                                    hidden, args.eval_games, args.engine, args.parallel)
+                    print(f"  eval vs {args.reference} ({args.eval_games} games): wins {score:.1%}, "
+                          f"draws {draw:.1%}", flush=True)
+                    if len(pairings) > 1:
+                        _report(by_deck, indent="      ")
+                    meta["eval_vs_reference"] = score
+                save(net, str(out / f"iter{it:04d}.pt"), **meta)
+                if score > best:
+                    best = score
+                    save(net, str(out / "best.pt"), **meta)
+                    print(f"  new best: {out / 'best.pt'} (iteration {it})", flush=True)
 
 
 def eval_cmd(args) -> None:
@@ -442,7 +480,11 @@ def main(argv=None) -> None:
                    help="GAE lambda; 1 = plain win/loss returns, lower trusts the value head more")
     p.add_argument("--entropy", type=float, default=0.01)
     p.add_argument("--snapshot-every", type=int, default=10, help="add a frozen copy to the opponent pool")
-    p.add_argument("--keep", type=int, default=5, help="how many recent snapshots stay in the pool")
+    p.add_argument("--keep", type=int, default=20, help="how many recent snapshots stay in the pool")
+    p.add_argument("--greedy-share", type=float, default=0.25,
+                   help="share of games against GreedyAgent; the rest are against snapshots")
+    p.add_argument("--reference", help="checkpoint to judge evaluations against head-to-head; best.pt keeps "
+                                       "the best (without it, the best against GreedyAgent)")
     p.add_argument("--eval-every", type=int, default=10)
     p.add_argument("--eval-games", type=int, default=200)
     p.add_argument("--seed", type=int, default=0)

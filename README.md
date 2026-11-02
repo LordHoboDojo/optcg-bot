@@ -100,6 +100,7 @@ used at all.
 | `optcg/human.py` | Terminal play against a bot |
 | `optcg/env.py` | Training environment and observation encoding |
 | `optcg/nn/` | PyTorch policy network, imitation and PPO training (needs PyTorch) |
+| `optcg/search.py` | The network plus search (information-set MCTS on the Rust engine) |
 | `optcg/replay.py` | Records a game as an HTML page; `replay_viewer.html` is the table, for replays and live play |
 | `optcg/web.py` | Local server for playing a bot in the browser, on the replay page |
 | `engine-rs/` | The same engine in Rust, as the Python module `optcg_rs` (see its README) |
@@ -182,7 +183,7 @@ network call: one call per move costs ~0.4 ms, batched ~0.05 ms, against ~0.01 m
 engine itself. On one core that makes rollouts and evaluation about 3.7x faster than one Python
 game at a time; with 11 workers and 128 games an iteration, the GPU update is now the larger part.
 
-A run without `--league` is locked to one matchup (Rocks vs Linlin by default), so the bot learns
+A run without `--league` is locked to one matchup (your Rocks list, `decks/rocks.txt`, vs Linlin by default), so the bot learns
 those two decks and nothing else. `--league` instead samples every pairing of the decks whose
 effect text is fully implemented, with the learner on either side, so one bot learns them all and
 far more cards see real play. Evaluations then break the win rate down per deck:
@@ -198,6 +199,24 @@ and scores every legal option against the pooled state; a value head predicts th
 `ppo` plays games in parallel worker processes against GreedyAgent and frozen snapshots of
 itself, on both seats, and saves `latest.pt` every iteration and `iterNNNN.pt` at each evaluation.
 Checkpoints are tied to the card list in `data/cards.json`; retrain after refreshing it.
+
+### Search on top of the network
+
+`optcg/search.py` is a second bot built from the same checkpoint: at each decision it imagines
+the cards it can't see (the opponent's hand, both decks, face-down Life, reshuffled to fit
+everything it has seen, revealed cards included) and plays the game forward in many such worlds
+on the Rust engine, one search tree shared by all of them (information-set MCTS). The network's
+move scores are the priors and its value head scores where a simulation stops, as in AlphaZero.
+The plain network bot is unchanged, so the two compare directly:
+
+```bash
+.venv/bin/python -m optcg.search runs/rocks/latest.pt --vs net --games 200   # search vs no search
+.venv/bin/python -m optcg.search runs/rocks/latest.pt --vs greedy --sims 400
+.venv/bin/python -m optcg.web --bot mcts:runs/rocks/latest.pt --open         # play against it
+```
+
+`--sims` (default 200) is simulations per decision; leaves are scored 8 to a network call.
+It needs the Rust engine. In the browser the server keeps a Rust copy of the game in step.
 
 `python3 tools/bench.py` measures speed. On one core the Rocks vs Linlin matchup runs about
 90 games/s bot-vs-bot and 40 games/s through the env with encoding (about 180 decisions a game).

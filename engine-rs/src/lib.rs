@@ -209,6 +209,11 @@ mod py {
             self.g.pending.as_ref().map(|d| d.player)
         }
 
+        /// Search-tree names for the pending options (Game::option_keys).
+        fn option_keys(&self, player: u8) -> Vec<(u8, i64, i64, i64)> {
+            self.g.option_keys(player)
+        }
+
         fn pending_json(&self) -> Option<String> {
             crate::pending(&self.g).map(|v| v.to_string())
         }

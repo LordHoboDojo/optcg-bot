@@ -10,7 +10,9 @@
 A deck is a list of your own in decks/ (e.g. "rocks" for decks/rocks.txt), a decklist file
 ('4xOP01-016' or '4 OP01-016 Name' per line), an official recommended deck name (or a unique
 part of one), or sample-red / sample-green.
-A bot is random, greedy, or a trained network checkpoint (.pt, needs PyTorch).
+A bot is random, greedy, or a trained network checkpoint (.pt, needs PyTorch). mcts:<checkpoint>
+adds search on top of the network; it plays on the Rust engine, so use it in optcg.web or
+optcg.search.
 """
 from __future__ import annotations
 
@@ -59,10 +61,14 @@ def play_human(decks: tuple[Deck, Deck], seat: int, bot: Agent, seed=None, human
 def make_agent(spec: str) -> Agent:
     if spec in AGENTS:
         return AGENTS[spec]()
+    if spec.startswith("mcts:") and spec.endswith(".pt"):  # search on top of the network (optcg/search.py)
+        from .nn.model import load
+        from .search import MCTSAgent
+        return MCTSAgent(load(spec[len("mcts:"):]))
     if spec.endswith(".pt"):
         from .nn.model import NeuralAgent, load
         return NeuralAgent(load(spec))
-    raise SystemExit(f"unknown bot {spec!r}: use {', '.join(AGENTS)} or a .pt checkpoint")
+    raise SystemExit(f"unknown bot {spec!r}: use {', '.join(AGENTS)}, a .pt checkpoint or mcts:<checkpoint>")
 
 
 DECK_DIR = Path(__file__).resolve().parent.parent / "decks"  # your own lists: decks/<name>.txt
