@@ -13,6 +13,10 @@ class Agent:
     def act(self, game: Game, decision: Decision) -> Action:
         raise NotImplementedError
 
+    def pick(self, game) -> int:
+        """The same choice for a Rust engine game (optcg_rs.Game): an option number."""
+        raise NotImplementedError(f"{type(self).__name__} can't play on the Rust engine")
+
 
 class RandomAgent(Agent):
     def __init__(self, seed: Optional[int] = None):
@@ -21,12 +25,18 @@ class RandomAgent(Agent):
     def act(self, game, decision):
         return self.rng.choice(decision.options)
 
+    def pick(self, game):
+        return self.rng.randrange(game.num_options())
+
 
 class GreedyAgent(Agent):
     """Simple rule-of-thumb play. A baseline to beat, not a strong player.
 
     It reads only the board and its own hand, never hidden information.
     """
+
+    def pick(self, game):
+        return game.greedy()  # the same rules, run in Rust (engine-rs/src/agents.rs)
 
     def act(self, game, d):
         handler = getattr(self, f"_{d.kind}", None)

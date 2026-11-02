@@ -12,6 +12,8 @@ use crate::scripts::script;
 pub struct Db {
     pub defs: Vec<CardDef>,
     pub by_id: HashMap<String, u16>,
+    /// The network's embedding index for each def (env.card_index()); 0 when unknown.
+    pub emb: Vec<u32>,
 }
 
 impl Db {
@@ -22,13 +24,19 @@ impl Db {
 
     pub fn from_json(text: &str) -> Result<Db, String> {
         let cards: Vec<Value> = serde_json::from_str(text).map_err(|e| e.to_string())?;
-        let mut db = Db { defs: Vec::with_capacity(cards.len()), by_id: HashMap::new() };
+        let mut db = Db { defs: Vec::with_capacity(cards.len()), by_id: HashMap::new(), emb: vec![] };
         for j in &cards {
             let d = card_from_json(j)?;
             db.by_id.insert(d.id.clone(), db.defs.len() as u16);
             db.defs.push(d);
         }
+        db.emb = vec![0; db.defs.len()];
         Ok(db)
+    }
+
+    /// Use the network's card numbering for observations.
+    pub fn set_card_index(&mut self, index: &HashMap<String, u32>) {
+        self.emb = self.defs.iter().map(|d| index.get(&d.id).copied().unwrap_or(0)).collect();
     }
 
     pub fn index(&self, id: &str) -> Result<u16, String> {

@@ -1,6 +1,7 @@
 //! ONE PIECE CARD GAME rules engine in Rust: a port of the Python engine in optcg/, built as the
 //! Python module `optcg_rs` (see engine-rs/README.md).
 
+pub mod agents;
 pub mod cards;
 pub mod compile;
 pub mod db;
@@ -76,6 +77,7 @@ pub fn pending(g: &Game) -> Option<Value> {
 
 #[cfg(feature = "python")]
 mod py {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use pyo3::exceptions::PyValueError;
@@ -92,9 +94,15 @@ mod py {
 
     #[pymethods]
     impl PyDb {
+        /// `card_index`: the network's card numbering (optcg.env.card_index()) for encode().
         #[new]
-        fn new(path: &str) -> PyResult<Self> {
-            Db::load(path).map(|d| PyDb { inner: Arc::new(d) }).map_err(PyValueError::new_err)
+        #[pyo3(signature = (path, card_index=None))]
+        fn new(path: &str, card_index: Option<HashMap<String, u32>>) -> PyResult<Self> {
+            let mut db = Db::load(path).map_err(PyValueError::new_err)?;
+            if let Some(ix) = card_index {
+                db.set_card_index(&ix);
+            }
+            Ok(PyDb { inner: Arc::new(db) })
         }
 
         fn __len__(&self) -> usize {
@@ -202,6 +210,21 @@ mod py {
 
         fn pending_json(&self) -> Option<String> {
             crate::pending(&self.g).map(|v| v.to_string())
+        }
+
+        /// The network's observation for the pending decision (optcg.env.encode):
+        /// (scalars, card rows, option rows, decision kind index, player).
+        #[allow(clippy::type_complexity)]
+        fn encode(&mut self) -> PyResult<(Vec<f64>, Vec<[f64; 16]>, Vec<[i64; 6]>, usize, u8)> {
+            let d = self.g.pending.clone().ok_or_else(|| PyValueError::new_err("the game is over"))?;
+            let o = self.g.view(|e| crate::agents::encode(e, &d));
+            Ok((o.scalars, o.cards, o.options, o.decision, o.player))
+        }
+
+        /// The option GreedyAgent would pick.
+        fn greedy(&mut self) -> PyResult<usize> {
+            let d = self.g.pending.clone().ok_or_else(|| PyValueError::new_err("the game is over"))?;
+            Ok(self.g.view(|e| crate::agents::greedy(e, &d)))
         }
 
         fn snapshot_json(&mut self) -> String {

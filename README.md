@@ -102,7 +102,7 @@ used at all.
 `engine-rs/` is a port of the engine, compiler and scripts to Rust, built as the Python module
 `optcg_rs`. Same seed and same choices give the same game in both engines, checked decision by
 decision by `tests/test_rust_engine.py`. It runs a decision in about 4 us (Python: ~43 us) and
-copies a game in progress in about 2 us, for search. Training still uses the Python engine.
+copies a game in progress in about 2 us, for search. Training uses it when it is built.
 Build it with `cd engine-rs && maturin develop --release`; details in `engine-rs/README.md`.
 
 ## Driving the engine
@@ -166,6 +166,11 @@ in the project venv (`python3 -m venv .venv && .venv/bin/pip install torch`).
 .venv/bin/python -m optcg.nn.train eval runs/ppo/latest.pt --vs greedy
 .venv/bin/python -m optcg.play --deck0 "(Blue) Rocks.D.Xebec" --deck1 "(Yellow) Charlotte Linlin" --human 0 --p1 runs/ppo/latest.pt
 ```
+
+Games run on the Rust engine when it is built (`engine-rs/`), else on the Python one; `--engine`
+picks. Both give the same games and observations, so checkpoints work with either. Imitation's
+games run about 5x faster on Rust; PPO rollouts barely change, because the network scoring one
+decision at a time takes ~0.4 ms against ~0.01 ms for the engine.
 
 A run without `--league` is locked to one matchup (Rocks vs Linlin by default), so the bot learns
 those two decks and nothing else. `--league` instead samples every pairing of the decks whose

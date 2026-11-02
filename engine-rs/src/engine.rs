@@ -1594,11 +1594,10 @@ impl Game {
     fn advance(&mut self, in_place: bool) -> bool {
         let mut in_place = in_place;
         loop {
-            if !in_place {
+            if !std::mem::take(&mut in_place) {
                 self.state.clone_from(&self.checkpoint);
                 self.log.truncate(self.seg_log);
             }
-            in_place = false;
             let r = {
                 let mut e = Eng {
                     s: &mut self.state,

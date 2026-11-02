@@ -35,6 +35,42 @@ class Parity(unittest.TestCase):
 
 
 @unittest.skipIf(optcg_rs is None, "optcg_rs not built")
+class Training(unittest.TestCase):
+    """The Rust-backed Env is the same environment: same observations, opponent moves and rewards."""
+
+    def test_env_matches_python(self):
+        from optcg.agents import GreedyAgent, RandomAgent
+        from optcg.env import Env
+        ds = covered()
+        names = sorted(ds)
+        for seed in range(6):
+            decks = (ds[names[seed % 3]], ds[names[(seed + 1) % 3]])
+            seat = seed % 2
+            opp = GreedyAgent() if seed < 3 else RandomAgent(seed)
+            twin = GreedyAgent() if seed < 3 else RandomAgent(seed)
+            py, rs = Env(*decks, opponent=opp, seat=seat), Env(*decks, opponent=twin, seat=seat, engine="rust")
+            a, b = py.reset(seed), rs.reset(seed)
+            rng = random.Random(seed)
+            while a is not None:
+                self.assertEqual(a, {k: [list(r) for r in v] if k in ("cards", "options") else v for k, v in b.items()})
+                k = rng.randrange(len(a["options"]))
+                (a, ra, da), (b, rb, db_) = py.step(k), rs.step(k)
+                self.assertEqual((ra, da), (rb, db_))
+            self.assertIsNone(b)
+            self.assertEqual(py.reward(), rs.reward())
+
+    def test_imitation_data_matches_python(self):
+        from optcg.nn.train import _imitation_games
+        pairs = (("(Blue) Rocks.D.Xebec", "(Black) Monkey.D.Luffy"),)
+        py = _imitation_games((pairs, [0, 1], "python"))
+        rs = _imitation_games((pairs, [0, 1], "rust"))
+        self.assertEqual(len(py), len(rs))
+        for (o1, k1), (o2, k2) in zip(py, rs):
+            self.assertEqual(k1, k2)
+            self.assertEqual(o1["cards"], [list(r) for r in o2["cards"]])
+
+
+@unittest.skipIf(optcg_rs is None, "optcg_rs not built")
 class Search(unittest.TestCase):
     def setUp(self):
         ds = covered()

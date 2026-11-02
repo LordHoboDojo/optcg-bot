@@ -16,10 +16,16 @@ numbers, so any ML library can turn them into tensors:
 Options vary in number and meaning at every decision, so a policy should score each option
 row (together with the state) and pick among them, not use a fixed action space.
 Reward is +1 for a win, -1 for a loss and 0 otherwise (draws and games cut off at max_steps).
+
+`engine="rust"` runs the game in the Rust engine (engine-rs/, module optcg_rs), which plays the
+same games and gives the same observations, several times faster. Agents then answer through
+`pick(game)` instead of `act(game, decision)`.
 """
 from __future__ import annotations
 
+import random
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 from .actions import Decision
@@ -127,12 +133,61 @@ def encode(g: Game, d: Decision) -> dict:
             "decision": _index(DECISION_KINDS, d.kind), "player": me}
 
 
+# ---------------------------------------------------------------- the Rust engine
+
+def rust_available() -> bool:
+    try:
+        import optcg_rs  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@lru_cache(maxsize=1)
+def rust_db():
+    """The Rust engine's card database, numbered like card_index() for encoding."""
+    import optcg_rs
+    return optcg_rs.Db(str(Path(__file__).resolve().parent.parent / "data" / "cards.json"), card_index())
+
+
+def rust_game(decks: tuple[Deck, Deck], seed: Optional[int] = None, fast: bool = True):
+    """A Rust game with these decks. `fast` turns off log lines and option labels."""
+    import optcg_rs
+    g = optcg_rs.Game(rust_db(), [(d.leader.id, [c.id for c in d.cards]) for d in decks],
+                      random.randrange(1 << 62) if seed is None else seed)
+    if fast:
+        g.logging = False
+        g.labels = False
+    return g
+
+
+def encode_rust(g) -> dict:
+    """encode() for a Rust game's pending decision; the same numbers."""
+    scalars, cards, options, decision, player = g.encode()
+    return {"scalars": scalars, "cards": cards, "options": options, "decision": decision, "player": player}
+
+
+def play_rust(decks: tuple[Deck, Deck], agents: tuple[Agent, Agent], seed: Optional[int] = None,
+              max_steps: int = 20_000):
+    """play_game() on the Rust engine; returns the finished game."""
+    g = rust_game(decks, seed)
+    for _ in range(max_steps):
+        if g.over:
+            return g
+        g.step(agents[g.pending_player()].pick(g))
+    raise RuntimeError(f"game did not finish in {max_steps} steps")
+
+
 class Env:
     """The learner plays `seat`; `opponent` answers the other seat's decisions inside step()."""
 
-    def __init__(self, deck0: Deck, deck1: Deck, opponent: Agent, seat: int = 0, max_steps: int = 20_000):
+    def __init__(self, deck0: Deck, deck1: Deck, opponent: Agent, seat: int = 0, max_steps: int = 20_000,
+                 engine: str = "python"):
+        if engine not in ("python", "rust"):
+            raise ValueError(f"unknown engine {engine!r}")
         self.decks = (deck0, deck1)
         self.opponent, self.seat, self.max_steps = opponent, seat, max_steps
+        self.rust = engine == "rust"
         self.game: Optional[Game] = None
         self.steps = 0
         self.truncated = False
@@ -143,25 +198,29 @@ class Env:
 
     @property
     def decision(self) -> Decision:
+        """The pending Decision (Python engine only)."""
         return self.game.pending
 
+    def _obs(self) -> dict:
+        return encode_rust(self.game) if self.rust else encode(self.game, self.game.pending)
+
     def reset(self, seed: Optional[int] = None) -> Optional[dict]:
-        self.game = Game(self.decks, seed=seed)
+        self.game = rust_game(self.decks, seed) if self.rust else Game(self.decks, seed=seed)
         self.steps = 0
         self.truncated = False
         self._advance()
-        return None if self.done else encode(self.game, self.game.pending)
+        return None if self.done else self._obs()
 
     def step(self, option: int) -> tuple[Optional[dict], float, bool]:
         """Answer the current decision with option number `option`; returns (obs, reward, done)."""
         if self.done:
             raise RuntimeError("the game is over; call reset()")
-        self.game.step(self.game.pending.options[option])
+        self.game.step(option if self.rust else self.game.pending.options[option])
         self.steps += 1
         self._advance()
         if self.done:
             return None, self.reward(), True
-        return encode(self.game, self.game.pending), 0.0, False
+        return self._obs(), 0.0, False
 
     def reward(self) -> float:
         g = self.game
@@ -176,8 +235,13 @@ class Env:
             if self.steps >= self.max_steps:
                 self.truncated = True
                 return
-            d = g.pending
-            if d.player == self.seat:
-                return
-            g.step(self.opponent.act(g, d))
+            if self.rust:
+                if g.pending_player() == self.seat:
+                    return
+                g.step(self.opponent.pick(g))
+            else:
+                d = g.pending
+                if d.player == self.seat:
+                    return
+                g.step(self.opponent.act(g, d))
             self.steps += 1

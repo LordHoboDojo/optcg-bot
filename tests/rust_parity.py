@@ -7,6 +7,7 @@ from optcg import Game
 from optcg.agents import GreedyAgent
 from optcg.cards import (CANNOT_ATTACK, KEYWORDS, NO_KO_BY_EFFECTS, NO_KO_BY_OPP_EFFECTS, NO_KO_IN_BATTLE)
 from optcg.carddb import coverage, official_decks
+from optcg.env import encode
 
 ALL_KW = sorted(KEYWORDS | {CANNOT_ATTACK, NO_KO_IN_BATTLE, NO_KO_BY_EFFECTS, NO_KO_BY_OPP_EFFECTS})
 _db = None
@@ -15,7 +16,8 @@ _db = None
 def rust_db():
     global _db
     if _db is None:
-        _db = optcg_rs.Db("data/cards.json")
+        from optcg.env import card_index
+        _db = optcg_rs.Db("data/cards.json", card_index())
     return _db
 
 
@@ -67,6 +69,16 @@ def play_both(decks, seed, policy, rng):
         a, b = pending(py), (json.loads(rs.pending_json()) if rs.pending_json() else None)
         if a != b:
             raise Mismatch(_diff("decision", a, b, py, n))
+        if not py.over:
+            a = encode(py, py.pending)
+            sc, cards, opts, dk, pl = rs.encode()
+            b = {"scalars": sc, "cards": [list(r) for r in cards], "options": [list(r) for r in opts],
+                 "decision": dk, "player": pl}
+            if a != b:
+                raise Mismatch(_diff("encoding", a, b, py, n))
+            k = py.pending.options.index(agents[py.pending.player].act(py, py.pending))
+            if k != rs.greedy():
+                raise Mismatch(_diff("greedy choice", k, rs.greedy(), py, n) + f"\n  decision: {pending(py)}")
         if len(py.log) != rs.log_len:
             raise Mismatch(_diff("log length", len(py.log), rs.log_len, py, n) + f"\n  rs last: {rs.log[-3:]}")
         if py.over:

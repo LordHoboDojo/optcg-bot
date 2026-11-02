@@ -18,7 +18,8 @@ implemented, sampled per game, so one bot learns them all and far more cards see
     .venv/bin/python -m optcg.nn.train eval runs/league/latest.pt --league --vs greedy
 
 Games run in parallel worker processes (--workers, default: CPU count - 1); learning runs on
---device (default: the Apple GPU when available, else the CPU).
+--device (default: the Apple GPU when available, else the CPU). Games use the Rust engine when
+it is built (engine-rs/), the Python one otherwise; --engine picks. Both play the same games.
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ import torch
 from torch.nn import functional as F
 
 from ..agents import AGENTS, GreedyAgent
-from ..env import Env, encode
+from ..env import Env, encode, encode_rust, play_rust, rust_available, rust_game
 from ..play import play_game, resolve_deck
 from .model import NeuralAgent, PolicyNet, collate, load, save
 
@@ -94,9 +95,16 @@ def _agent(spec, hidden):
 
 
 def _imitation_games(args):
-    pairings, seeds = args
+    pairings, seeds, engine = args
     data = []
     for seed in seeds:
+        if engine == "rust":
+            g = rust_game(_decks(_assign(pairings, seed)[0]), seed)
+            while not g.over:
+                k = g.greedy()
+                data.append((encode_rust(g), k))
+                g.step(k)
+            continue
         greedy = GreedyAgent()
 
         class Recorder(GreedyAgent):
@@ -110,13 +118,13 @@ def _imitation_games(args):
 
 def _rollouts(args):
     """Play games with the learner sampling its moves; returns one episode per game."""
-    pairings, state, hidden, opponents, seeds = args
+    pairings, state, hidden, opponents, seeds, engine = args
     net = _net(state, hidden)
     episodes = []
     for seed in seeds:
         matchup, seat = _assign(pairings, seed)
         opp_spec = random.Random(seed).choice(opponents)
-        env = Env(*_decks(matchup), opponent=_agent(opp_spec, hidden), seat=seat)
+        env = Env(*_decks(matchup), opponent=_agent(opp_spec, hidden), seat=seat, engine=engine)
         obs = env.reset(seed)
         steps = []
         while not env.done:
@@ -133,13 +141,14 @@ def _rollouts(args):
 
 def _eval_games(args):
     """Returns {(matchup, deck a played): [wins, draws, games]} so a league can be broken down."""
-    pairings, a_spec, b_spec, hidden, seeds = args
+    pairings, a_spec, b_spec, hidden, seeds, engine = args
     a = AGENTS[a_spec]() if isinstance(a_spec, str) else NeuralAgent(_net(a_spec, hidden))
     b = AGENTS[b_spec]() if isinstance(b_spec, str) else NeuralAgent(_net(b_spec, hidden))
     out: dict = {}
     for seed in seeds:
         matchup, seat = _assign(pairings, seed)
-        g = play_game(_decks(matchup), (a, b) if seat == 0 else (b, a), seed=seed)
+        play = play_rust if engine == "rust" else play_game
+        g = play(_decks(matchup), (a, b) if seat == 0 else (b, a), seed=seed)
         row = out.setdefault(matchup[seat], [0, 0, 0])
         row[0] += g.winner == seat
         row[1] += g.winner is None
@@ -172,11 +181,12 @@ def _pool(workers):
 
 # ---------------------------------------------------------------- commands
 
-def evaluate(pool, workers, pairings, a, b, hidden, games, seed0=10_000):
+def evaluate(pool, workers, pairings, a, b, hidden, games, engine="python", seed0=10_000):
     """Share of games `a` wins against `b` (and draws), alternating seats and matchups.
     Also returns the win rate per deck `a` played, which is what a league run wants to see."""
     parts = pool.map(_eval_games,
-                     [(pairings, a, b, hidden, s) for s in _split(list(range(seed0, seed0 + games)), workers)])
+                     [(pairings, a, b, hidden, s, engine)
+                      for s in _split(list(range(seed0, seed0 + games)), workers)])
     by_deck: dict = {}
     for part in parts:
         for deck, (w, d, n) in part.items():
@@ -201,7 +211,8 @@ def imitate(args) -> None:
     with _pool(args.workers) as pool:
         t = time.time()
         data = [x for part in pool.map(_imitation_games,
-                                       [(pairings, s) for s in _split(list(range(args.games)), args.workers)])
+                                       [(pairings, s, args.engine)
+                                        for s in _split(list(range(args.games)), args.workers)])
                 for x in part]
         print(f"{len(data)} decisions from {args.games} greedy games over "
               f"{len(pairings)} matchup(s) in {time.time() - t:.0f}s")
@@ -230,7 +241,8 @@ def imitate(args) -> None:
         save(net, args.out, matchups=pairings)
         state = _cpu_state(net)
         for vs in ("random", "greedy"):
-            win, _, by_deck = evaluate(pool, args.workers, pairings, state, vs, args.hidden, args.eval_games)
+            win, _, by_deck = evaluate(pool, args.workers, pairings, state, vs, args.hidden, args.eval_games,
+                                       args.engine)
             print(f"vs {vs}: wins {win:.1%}")
             if len(pairings) > 1:
                 _report(by_deck)
@@ -271,7 +283,7 @@ def ppo(args) -> None:
             opponents = ["greedy"] * max(1, len(snapshots)) + snapshots[-args.keep:]
             seeds = list(range(seed, seed + args.games))
             seed += args.games
-            episodes = [e for part in pool.map(_rollouts, [(pairings, state, hidden, opponents, s)
+            episodes = [e for part in pool.map(_rollouts, [(pairings, state, hidden, opponents, s, args.engine)
                                                            for s in _split(seeds, args.workers)]) for e in part]
             t_play = time.time() - t
 
@@ -321,7 +333,7 @@ def ppo(args) -> None:
                 snapshots.append(_cpu_state(net))
             if it % args.eval_every == 0 or it == args.iters:
                 win, draw, by_deck = evaluate(pool, args.workers, pairings, _cpu_state(net), "greedy",
-                                              hidden, args.eval_games)
+                                              hidden, args.eval_games, args.engine)
                 print(f"  eval vs greedy (best move, {args.eval_games} games): wins {win:.1%}, draws {draw:.1%}",
                       flush=True)
                 if len(pairings) > 1:
@@ -334,7 +346,8 @@ def eval_cmd(args) -> None:
     net = load(args.checkpoint)
     vs = args.vs if args.vs in AGENTS else load(args.vs).state_dict()
     with _pool(args.workers) as pool:
-        win, draw, by_deck = evaluate(pool, args.workers, pairings, net.state_dict(), vs, net.hidden, args.games)
+        win, draw, by_deck = evaluate(pool, args.workers, pairings, net.state_dict(), vs, net.hidden, args.games,
+                                      args.engine)
     print(f"{args.checkpoint} vs {args.vs}: wins {win:.1%}, draws {draw:.1%} over {args.games} games")
     if len(pairings) > 1:
         _report(by_deck)
@@ -351,6 +364,8 @@ def main(argv=None) -> None:
                        help="use every pairing of the fully implemented decks instead of --deck0/--deck1")
         p.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
         p.add_argument("--device", default="auto", help="where learning runs: auto, cpu, mps or cuda")
+        p.add_argument("--engine", default="auto", choices=("auto", "python", "rust"),
+                       help="rules engine for the games: auto uses Rust (optcg_rs) when it is built")
 
     p = sub.add_parser("imitate")
     common(p)
@@ -392,6 +407,9 @@ def main(argv=None) -> None:
     p.set_defaults(fn=eval_cmd)
 
     args = ap.parse_args(argv)
+    if args.engine == "auto":
+        args.engine = "rust" if rust_available() else "python"
+    print(f"engine: {args.engine}", flush=True)
     args.fn(args)
 
 

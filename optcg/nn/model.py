@@ -107,9 +107,17 @@ class NeuralAgent(Agent):
 
     @torch.no_grad()
     def act(self, game: Game, d: Decision):
-        logits, _ = self.net(collate([encode(game, d)]))
+        return d.options[self._choose(encode(game, d))]
+
+    @torch.no_grad()
+    def pick(self, game) -> int:
+        from ..env import encode_rust
+        return self._choose(encode_rust(game))
+
+    def _choose(self, obs: dict) -> int:
+        logits, _ = self.net(collate([obs]))
         i = torch.distributions.Categorical(logits=logits[0]).sample() if self.sample else logits[0].argmax()
-        return d.options[int(i)]
+        return int(i)
 
 
 def save(net: PolicyNet, path: str, **meta) -> None:
