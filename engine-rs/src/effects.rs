@@ -1007,13 +1007,20 @@ impl<'a> Eng<'a> {
                 }
             }
             Tpl::Scry { n } => {
+                // look at the top N, then put them all back on top or all on the bottom, in any order
                 let deck = &self.ps(me).deck;
                 let top: Vec<Uid> = deck[deck.len().saturating_sub(*n)..].iter().rev().copied().collect();
-                for c in top {
-                    if self.confirm(me, &format!("Put {} on the bottom of your deck?", self.name(c)))? {
-                        self.move_card(c, Some(Zone::Deck), true, false);
-                    }
+                if top.is_empty() {
+                    return Ok(());
                 }
+                let names: Vec<&str> = top.iter().map(|&c| self.name(c)).collect();
+                let opts = vec![
+                    Action::new(ActKind::Select).index(0).label("Top of your deck"),
+                    Action::new(ActKind::Select).index(1).label("Bottom of your deck"),
+                ];
+                let prompt = format!("Place {} at the top or bottom of your deck?", names.join(", "));
+                let bottom = self.choose(me, DecisionKind::Select, opts, &prompt)?.index == Some(1);
+                self.place_in_order(me, top, Zone::Deck, bottom)?;
             }
             Tpl::PlayFrom { n, hand, trash, hand_first, rested, pred } => {
                 let ps = self.ps(me);

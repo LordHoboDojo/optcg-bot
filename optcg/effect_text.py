@@ -1188,13 +1188,17 @@ def t_look(m):
 
 
 def t_scry(m):
+    """Look at the top N, then put them all back on top or all on the bottom, in any order."""
     n = int(m["n"])
 
     def run(g, src):
-        deck = g.players[src.owner].deck
-        for c in deck[-n:][::-1]:
-            if (yield from g.confirm(src.owner, f"Put {c.name} on the bottom of your deck?")):
-                g.move(c, "deck", bottom=True)
+        top = g.players[src.owner].deck[-n:][::-1]
+        if not top:
+            return
+        a = yield from g.choose(src.owner, "select", [Action("select", index=0, label="Top of your deck"),
+                                                      Action("select", index=1, label="Bottom of your deck")],
+                                f"Place {', '.join(c.name for c in top)} at the top or bottom of your deck?")
+        yield from g.place_in_order(src.owner, top, "deck", bottom=a.index == 1)
     return run
 
 
