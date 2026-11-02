@@ -23,6 +23,8 @@ use crate::rng::PyRandom;
 pub const MAX_CHARACTERS: usize = 5;
 pub const DON_DECK_SIZE: u32 = 10;
 pub const OPENING_HAND: usize = 5;
+/// [Once Per Turn] bookkeeping for replacement effects, apart from effect indexes.
+const REPLACEMENT_KEY: usize = 10_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -530,14 +532,43 @@ impl<'a> Eng<'a> {
             if self.negated(src) {
                 continue;
             }
-            for r in &self.d(src).st.replacements {
+            for (j, r) in self.d(src).st.replacements.iter().enumerate() {
+                let key = REPLACEMENT_KEY + j;
+                if r.once_per_turn && self.c(src).opt_turn(key) == Some(self.s.turn_number) {
+                    continue;
+                }
                 if !((r.applies)(self, src, card, by, ko) && (r.payable)(self, src)) {
                     continue;
                 }
                 if self.confirm(owner, &format!("{}: {} instead?", self.name(src), r.text))? {
+                    if r.once_per_turn {
+                        let t = self.s.turn_number;
+                        self.cm(src).set_opt(key, t);
+                    }
                     let (s, c) = (self.name(src), self.name(card));
                     self.log(|| format!("{s} replaces the removal of {c}"));
                     (r.pay)(self, src, card)?;
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// Offer `player`'s "if you would take damage ... instead" effects for 1 point of damage.
+    fn damage_replaced(&mut self, player: u8) -> R<bool> {
+        for src in self.ps(player).field() {
+            if self.negated(src) {
+                continue;
+            }
+            for r in &self.d(src).st.damage_replacements {
+                if !((r.applies)(self, src, player) && (r.payable)(self, src)) {
+                    continue;
+                }
+                if self.confirm(player, &format!("{}: {} instead of taking damage?", self.name(src), r.text))? {
+                    let n = self.name(src);
+                    self.log(|| format!("{n} replaces 1 damage"));
+                    (r.pay)(self, src)?;
                     return Ok(true);
                 }
             }
@@ -657,9 +688,22 @@ impl<'a> Eng<'a> {
         }
         let ready: Vec<usize> =
             self.d(card).effect_indexes(Timing::OnKo).filter(|&i| self.can_activate(card, i)).collect();
+        // "when one of your Characters ... is K.O.'d": judged while the card is still on the field
+        let owner = self.owner(card);
+        let mut watchers = vec![];
+        for src in self.ps(owner).field() {
+            if src == card {
+                continue;
+            }
+            for i in self.d(src).effect_indexes(Timing::AllyKo) {
+                let f = self.d(src).effects[i].ko_filter.expect("AllyKo effect without ko_filter");
+                if self.can_activate(src, i) && f(self, src, card) {
+                    watchers.push((src, i));
+                }
+            }
+        }
         self.log(|| format!("{name} is K.O.'d"));
         let mut paid = vec![];
-        let owner = self.owner(card);
         for i in ready {
             let eff = &self.d(card).effects[i];
             if eff.optional && !self.confirm(owner, &format!("Activate {}: {}?", name, eff.text))? {
@@ -672,6 +716,10 @@ impl<'a> Eng<'a> {
         self.mv(card, Zone::Trash);
         for i in paid {
             let p = Pending { src: card, idx: i, inc: self.c(card).incarnation, batch: self.next_batch(), activated: true };
+            self.s.queue.push(p);
+        }
+        for (src, i) in watchers {
+            let p = Pending { src, idx: i, inc: self.c(src).incarnation, batch: self.next_batch(), activated: false };
             self.s.queue.push(p);
         }
         Ok(())
@@ -692,6 +740,10 @@ impl<'a> Eng<'a> {
     /// Damage processing (4-6, 7-1-4-1-1).
     pub fn deal_damage(&mut self, p: u8, amount: u32, banish: bool) -> R<()> {
         for _ in 0..amount {
+            // one point at a time (4-6-2-2)
+            if self.damage_replaced(p)? {
+                continue;
+            }
             let Some(&card) = self.ps(p).life.last() else {
                 self.log(|| format!("Player {p} takes damage with 0 Life"));
                 return Err(Stop::Over(Some(1 - p)));
@@ -1326,7 +1378,9 @@ impl<'a> Eng<'a> {
                 .characters
                 .iter()
                 .copied()
-                .filter(|&c| c != tgt && !self.c(c).rested && self.has_keyword(c, Kw::Blocker))
+                .filter(|&c| {
+                    c != tgt && !self.c(c).rested && self.has_keyword(c, Kw::Blocker) && !self.has_keyword(c, Kw::NoBlocker)
+                })
                 .collect();
             if !blockers.is_empty() {
                 let mut opts = vec![Action::new(ActKind::Pass).label("Don't block")];

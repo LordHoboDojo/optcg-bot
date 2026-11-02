@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from .actions import Action
-from .cards import (CANNOT_ATTACK, KEYWORDS, NO_KO_BY_EFFECTS, NO_KO_BY_OPP_EFFECTS, NO_KO_IN_BATTLE,
+from .cards import (CANNOT_ATTACK, KEYWORDS, NO_BLOCKER, NO_KO_BY_EFFECTS, NO_KO_BY_OPP_EFFECTS, NO_KO_IN_BATTLE,
                     UNBLOCKABLE, Category, Effect, Timing)
 
 NO_KO = {"in battle": NO_KO_IN_BATTLE, "by effects": NO_KO_BY_EFFECTS,
@@ -123,7 +123,13 @@ COST_PARTS = [
     (r"(?:You may )?add (\d+) cards? from the top of your Life cards to your hand\s*", "life"),
     (r"(?:You may )?rest (\d+) of your cards\s*", "rest_cards"),
     (r"(?:You may )?turn (\d+) cards? from the top of your Life cards face-up\s*", "life_face_up"),
-    (r"(?:You may )?reveal (\d+) (.+?) from your hand\s*", "reveal"),
+    (r"(?:You may )?turn (\d+) cards? from the top of your Life cards face-down\s*", "life_face_down"),
+    (r"(?:You may )?reveal (?:a total of )?(\d+) (.+?) from your hand\s*", "reveal"),
+    (r"(?:You may )?give (\d+) active DON!! cards? to 1 of your Leader\s*", "give_leader_don"),
+    (r"(?:You may )?return (\d+) of your active DON!! cards? to your DON!! deck\s*", "return_active_don"),
+    (r"(?:You may )?rest your Leader \[([^\]]+)\]\s*", "rest_leader"),
+    (r"(?:You may )?K\.O\. (\d+) of your (.+?)\s*$", "ko_own"),
+    (r"(?:You may )?trash (\d+) of your (.+?)\s*$", "trash_own"),
     (r"(?:and|,)\s*", None),
 ]
 
@@ -137,10 +143,15 @@ def _parse_costs(prefix: str) -> dict:
                 if kind == "rest_don":
                     g1 = cm.group(1)
                     costs[kind] = CIRCLED[g1] if g1 in CIRCLED else int(g1)
-                elif kind in ("don_minus", "life", "rest_cards", "life_face_up"):
+                elif kind in ("don_minus", "life", "rest_cards", "life_face_up", "life_face_down",
+                              "give_leader_don", "return_active_don"):
                     costs[kind] = int(cm.group(1))
                 elif kind in ("trash", "reveal"):
                     costs[kind] = (int(cm.group(1)), parse_filter(cm.group(2)))
+                elif kind in ("ko_own", "trash_own"):
+                    costs[kind] = (int(cm.group(1)), _own_candidates(cm.group(2), chars_only=True))
+                elif kind == "rest_leader":
+                    costs[kind] = cm.group(1)
                 elif kind:
                     costs[kind] = True
                 prefix = prefix[cm.end():]
@@ -219,7 +230,8 @@ def _compile_line(line: str, raw: str, out: Compiled, bullets: list[str]) -> Non
 
 def _wrap_costs(action, costs: dict, ask: bool):
     """Costs paid while resolving: trash from hand, reveal from hand, rest your cards,
-    trash this card, Life card to hand."""
+    trash this card, Life card to hand, turn Life cards over, give or return DON!!, rest your
+    Leader, K.O. or trash your own Characters."""
     if not costs:
         return action, None
     trash_n, trash_pred = costs.get("trash", (0, None))
@@ -227,6 +239,12 @@ def _wrap_costs(action, costs: dict, ask: bool):
     life_n = costs.get("life", 0)
     rest_n = costs.get("rest_cards", 0)
     flip_n = costs.get("life_face_up", 0)
+    unflip_n = costs.get("life_face_down", 0)
+    give_n = costs.get("give_leader_don", 0)
+    return_n = costs.get("return_active_don", 0)
+    leader_name = costs.get("rest_leader")
+    ko_n, ko_cands = costs.get("ko_own", (0, None))
+    own_trash_n, own_trash_cands = costs.get("trash_own", (0, None))
     trash_self = costs.get("trash_self", False)
 
     def payable(g, src):
@@ -243,6 +261,17 @@ def _wrap_costs(action, costs: dict, ask: bool):
         if flip_n and (len(ps.life) < flip_n or any(c.face_up for c in ps.life[-flip_n:])):
             return False
         if trash_self and src.zone not in ("character", "stage"):
+            return False
+        # likewise turning face-down cards that already are (1-3-2-1)
+        if unflip_n and (len(ps.life) < unflip_n or not all(c.face_up for c in ps.life[-unflip_n:])):
+            return False
+        if (give_n or return_n) and ps.don_active < max(give_n, return_n):
+            return False
+        if leader_name and (ps.leader.name != leader_name or ps.leader.rested):
+            return False
+        if ko_n and len(ko_cands(g, src.owner)) < ko_n:
+            return False
+        if own_trash_n and len(own_trash_cands(g, src.owner)) < own_trash_n:
             return False
         return True
 
@@ -269,6 +298,27 @@ def _wrap_costs(action, costs: dict, ask: bool):
                 g.move(ps.life[-1], "hand")
         if trash_self:
             g.move(src, "trash")
+        for c in ps.life[-unflip_n:] if unflip_n else ():
+            c.face_up = False
+        if give_n:
+            g.give_don(src.owner, ps.leader, give_n)
+        if return_n:
+            ps.don_active -= return_n
+            ps.don_deck += return_n
+            g.fire(Timing.DON_RETURNED, ps.field)
+        if leader_name:
+            ps.leader.rested = True
+        if ko_n:
+            # 8-3-1-7: a K.O. that is replaced or prevented doesn't pay the cost
+            for c in (yield from g.choose_cards(src.owner, ko_cands(g, src.owner), ko_n, "K.O. for the cost",
+                                                exactly=True)):
+                yield from g.ko(c, by=src.owner)
+                if c.zone != "trash":
+                    return
+        if own_trash_n:
+            for c in (yield from g.choose_cards(src.owner, own_trash_cands(g, src.owner), own_trash_n,
+                                                "Trash for the cost", exactly=True)):
+                g.move(c, "trash")
         yield from action(g, src)
     return run, payable
 
@@ -383,6 +433,21 @@ COND_PARTS = [
      lambda m: lambda g, src: _cmp(len(g.players[src.owner].life), m.group(2), int(m.group(1)))),
     (r"you have (\d+) or (less|more) cards in your hand",
      lambda m: lambda g, src: _cmp(len(g.players[src.owner].hand), m.group(2), int(m.group(1)))),
+    (r"your opponent has (\d+) or (less|more) cards in their hand",
+     lambda m: lambda g, src: _cmp(len(g.players[1 - src.owner].hand), m.group(2), int(m.group(1)))),
+    (r"you have (\d+) or more cards in your trash",
+     lambda m: lambda g, src: len(g.players[src.owner].trash) >= int(m.group(1))),
+    (r"you have no Characters with a cost of (\d+) or more",
+     lambda m: lambda g, src: not any(g.cost(c) >= int(m.group(1)) for c in g.characters(src.owner))),
+    (r"your Leader has the <([^>]+)> attribute",
+     lambda m: lambda g, src: m.group(1) in _leader(g, src).d.attributes),
+    (r"your opponent has a Character with (\d+) base power or more",
+     lambda m: lambda g, src: any(g.base_power(c) >= int(m.group(1)) for c in g.characters(1 - src.owner))),
+    (r"your opponent has a Character with a cost of (\d+)",
+     lambda m: lambda g, src: any(g.cost(c) == int(m.group(1)) for c in g.characters(1 - src.owner))),
+    (r"the number of DON!! cards on your field is at least (\d+) less than the number on your opponent's field",
+     lambda m: lambda g, src: g.players[1 - src.owner].don_on_field - g.players[src.owner].don_on_field
+     >= int(m.group(1))),
     (r"you have (\d+) or more DON!! cards on your field",
      lambda m: lambda g, src: g.players[src.owner].don_on_field >= int(m.group(1))),
     (r"there is a Character with a cost of (\d+) or more",
@@ -448,6 +513,13 @@ def parse_body(text: str):
                 return
             yield from otherwise(g, src)
         return unless_they_trash
+    if m := re.fullmatch(r"(You may [^:]+?):\s*(.+)", text):
+        try:
+            costs = _parse_costs(m.group(1))
+        except Unsupported:
+            costs = None
+        if costs and not {"rest_don", "don_minus", "rest_self"} & set(costs):
+            return _wrap_costs(parse_body(_cap(m.group(2))), costs, ask=True)[0]
     if text.startswith("You may ") and not re.match(r"You may (trash|rest|add) .*:", text):
         inner = parse_body(_cap(text[len("You may "):]))
 
@@ -505,18 +577,22 @@ def parse_filter(f: str) -> Callable:
     m = re.fullmatch(
         r"(?:(?P<color>red|green|blue|purple|black|yellow) )?"
         r"(?:(?P<types>\{[^}]+\}(?: or \{[^}]+\})*) type )?"
-        r"(?:(?P<cat>Character|Event|Stage)(?: cards?)?|cards?)"
+        r"(?:(?P<cat>Character|Event|Stage)s?(?: cards?)?|cards?)"
+        r"(?: with the <(?P<attr>[^>]+)> attribute)?"
         r"(?: with a type including \"(?P<inc>[^\"]+)\")?"
         r"(?P<trig> with a \[Trigger\])?"
         r"(?: with a cost of (?P<c>\d+)(?: or (?P<dir>more|less))?)?"
+        r"(?: and the <(?P<attr2>[^>]+)> attribute)?"
         r"(?: and a type including \"(?P<inc2>[^\"]+)\")?"
-        r"(?: with (?P<pw>\d+) power or less)?"
+        r"(?: with (?P<pw>\d+) power(?P<pwle> or less)?)?"
+        r"(?P<trig2> and a \[Trigger\])?"
         r"(?: other than \[(?P<excl>[^\]]+)\])?", f)
     if not m:
-        raise Unsupported
+        return _either_filter(f)
     types = re.findall(r"\{([^}]+)\}", m["types"] or "")
     cat = Category(m["cat"]) if m["cat"] else None
     inc = m["inc"] or m["inc2"]
+    attr = m["attr"] or m["attr2"]
 
     def pred(c):
         if m["color"] and m["color"] not in c.d.colors:
@@ -531,12 +607,32 @@ def parse_filter(f: str) -> Callable:
             return False
         if m["c"] is not None and not _cost_ok(c.d.cost, int(m["c"]), m["dir"]):
             return False
-        if m["pw"] is not None and c.d.power > int(m["pw"]):
+        if m["pw"] is not None and (c.d.power > int(m["pw"]) if m["pwle"] else c.d.power != int(m["pw"])):
+            return False
+        if attr and attr not in c.d.attributes:
+            return False
+        if m["trig2"] and not c.d.trigger_text:
             return False
         if m["excl"] and c.name == m["excl"]:
             return False
         return True
     return pred
+
+
+# "[Megalo] or {Neptunian} type cards", "Event or {Punk Hazard} type cards", "[Sanji] or Event card":
+# a bare name, category or type, or a second kind of card. A trailing "other than [X]" covers both.
+# Other qualifiers can't be split safely ("yellow Character or Stage card with a cost of 2 or less"
+# limits both colour and cost on both sides), so those stay unsupported.
+EITHER_LEFT = r"\[[^\]]+\]|(?:Character|Event|Stage)s?(?: cards?)?|\{[^}]+\} type cards?"
+EITHER_SHARED = re.compile(r" with a cost of | power| attribute|^(?:red|green|blue|purple|black|yellow) ")
+
+
+def _either_filter(f: str) -> Callable:
+    m = re.fullmatch(rf"(?P<left>{EITHER_LEFT}) or (?P<right>.+?)(?: other than \[(?P<excl>[^\]]+)\])?", f)
+    if not m or EITHER_SHARED.search(m["right"]):
+        raise Unsupported
+    left, right, excl = parse_filter(m["left"]), parse_filter(m["right"]), m["excl"]
+    return lambda c: (left(c) or right(c)) and c.name != excl
 
 
 def _cost_ok(cost, n, direction):
@@ -662,14 +758,122 @@ def t_ko_stage(m):
 def t_debuff(m):
     n, v, kind = int(m["n"]), int(m["v"]), m["what"]
     with_leader, rested = m["who"].startswith("Leader"), bool(m["rested"])
+    min_power = int(m["minpw"]) if m["minpw"] else None
+    until = "next_end" if m["next"] else "turn"
 
     def run(g, src):
         o = 1 - src.owner
         cands = g.leader_and_characters(o) if with_leader else g.characters(o)
-        cands = [c for c in cands if c.rested or not rested]
+        cands = [c for c in cands if (c.rested or not rested) and (min_power is None or g.power(c) >= min_power)]
         for c in (yield from g.choose_cards(src.owner, cands, n, f"Give -{v} {kind}")):
-            (g.add_power if kind == "power" else g.add_cost)(c, -v, "turn", by=src.owner)
+            (g.add_power if kind == "power" else g.add_cost)(c, -v, until, by=src.owner)
     return run
+
+
+def t_give_any(m):
+    """Give up to N Characters (either side) +X or -X power."""
+    n, v = int(m["n"]), int(m["v"]) * (1 if m["sign"] == "+" else -1)
+
+    def run(g, src):
+        cands = g.characters(src.owner) + g.characters(1 - src.owner)
+        for c in (yield from g.choose_cards(src.owner, cands, n, f"{m['sign']}{m['v']} power")):
+            g.add_power(c, v, "turn", by=src.owner)
+    return run
+
+
+def t_opp_leader_debuff(m):
+    v = int(m["v"])
+    return _simple(lambda g, src: g.add_power(g.players[1 - src.owner].leader, -v, "turn", by=src.owner))
+
+
+def t_skip_refresh(m):
+    pred, n = _opp_pred(m), int(m["n"])
+
+    def run(g, src):
+        for c in (yield from g.choose_cards(src.owner, _opp_targets(g, src, pred), n,
+                                            "Won't become active next Refresh Phase")):
+            g.skip_next_refresh(c, by=src.owner)
+    return run
+
+
+def t_negate(m):
+    pred, n, back = _opp_pred(m), int(m["n"]), bool(m["ret"])
+
+    def run(g, src):
+        for c in (yield from g.choose_cards(src.owner, _opp_targets(g, src, pred), n, "Negate the effect")):
+            g.negate(c, "turn", by=src.owner)
+            if back:
+                yield from g.remove_from_field(c, "hand", by=src.owner)
+    return run
+
+
+def t_ko_or_rest(m):
+    pred, n = _opp_pred(m), int(m["n"])
+
+    def run(g, src):
+        for c in (yield from g.choose_cards(src.owner, _opp_targets(g, src, pred), n, "K.O. or rest a Character")):
+            a = yield from g.choose(src.owner, "select", [Action("select", index=0, label=f"K.O. {c.name}"),
+                                                          Action("select", index=1, label=f"Rest {c.name}")],
+                                    "K.O. or rest it?")
+            if a.index == 0:
+                yield from g.ko(c, by=src.owner)
+            else:
+                g.rest(c)
+    return run
+
+
+def t_rest_by_life(m):
+    """Rest a Character with cost up to the total of both players' Life cards."""
+    n = int(m["n"])
+
+    def run(g, src):
+        limit = len(g.players[0].life) + len(g.players[1].life)
+        cands = [c for c in g.characters(1 - src.owner) if g.cost(c) <= limit]
+        for c in (yield from g.choose_cards(src.owner, cands, n, "Rest a Character")):
+            g.rest(c)
+    return run
+
+
+def t_ko_own(m):
+    n, cands = int(m["n"]), _own_candidates(m["who"], chars_only=True)
+
+    def run(g, src):
+        for c in (yield from g.choose_cards(src.owner, cands(g, src.owner), n, "K.O. a Character")):
+            yield from g.ko(c, by=src.owner)
+    return run
+
+
+def t_buff_all(m):
+    """All of your Characters with N base power or less gain +X power."""
+    bp, v = int(m["bp"]), int(m["v"])
+    until = {"battle": "battle", "turn": "turn"}.get(m["dur"], "next_end")
+
+    def fn(g, src):
+        for c in g.characters(src.owner):
+            if g.base_power(c) <= bp:
+                g.add_power(c, v, until, by=src.owner)
+    return _simple(fn)
+
+
+def t_protect_all(m):
+    """All of your Characters with exactly N base power and a type can't be K.O.'d in battle."""
+    bp, t = int(m["bp"]), m["t"]
+
+    def fn(g, src):
+        for c in g.characters(src.owner):
+            if g.base_power(c) == bp and t in c.d.types:
+                g.grant_keyword(c, NO_KO_IN_BATTLE, "next_end", by=src.owner)
+    return _simple(fn)
+
+
+def t_no_blocker_all(m):
+    cost = int(m["c"])
+
+    def fn(g, src):
+        for c in g.characters(1 - src.owner):
+            if g.cost(c) == cost:
+                g.grant_keyword(c, NO_BLOCKER, "turn", by=src.owner)
+    return _simple(fn)
 
 
 def t_debuff_all(m):
@@ -793,6 +997,17 @@ def t_set_don_active(m):
     return _simple(fn)
 
 
+def t_give_rested_don_to(m):
+    n, cands = int(m["n"]), _own_candidates(m["who"])
+
+    def run(g, src):
+        if not g.players[src.owner].don_rested:
+            return
+        for c in (yield from g.choose_cards(src.owner, cands(g, src.owner), 1, "Give rested DON!!")):
+            g.give_don(src.owner, c, n, from_rested=True)
+    return run
+
+
 def t_give_rested_don(m):
     n, chars, name = int(m["n"]), bool(m["or"]), m["name"]
 
@@ -808,17 +1023,26 @@ def t_give_rested_don(m):
 
 OWN_PART = re.compile(
     r"(?P<base>Leader or Character cards|Leader or Characters|Characters or \[[^\]]+\]|Leader|Characters?"
-    r"|(?P<types>\{[^}]+\}(?: or \{[^}]+\})*) type Characters?|\[(?P<name>[^\]]+)\](?: cards?)?)"
-    r"(?: with a type including \"(?P<inc>[^\"]+)\")?")
+    r"|(?P<types>\{[^}]+\}(?: or \{[^}]+\})*) type (?P<tl>Leader or )?Characters?|\[(?P<name>[^\]]+)\](?: cards?)?)"
+    r"(?: with a type including \"(?P<inc>[^\"]+)\")?"
+    r"(?: with both the \{(?P<both>[^}]+)\} type and a \[Trigger\])?"
+    r"(?: with the <(?P<attr>[^>]+)>(?: or <(?P<attr2>[^>]+)>)? attribute)?"
+    r"(?:(?: and| with) (?P<pw>\d+) power or less)?"
+    r"(?: with a cost of (?P<cmin>\d+) or more)?")
 
 
-def _own_candidates(who: str):
+def _own_candidates(who: str, chars_only: bool = False):
     """Which of your cards a phrase allows: 'Leader or Characters', '[Nami] cards',
-    '{Land of Wano} type Characters or up to 1 of your Characters with a type including "X"'."""
+    '{Land of Wano} type Characters or up to 1 of your Characters with a type including "X"',
+    'Characters with the <Wisdom> attribute and 6000 power or less'. Power and cost limits read
+    current values. With `chars_only`, the phrase must name only Characters (costs paid with them)."""
     parts = []
     for text in re.split(r" or up to \d+ of your ", who):
         m = OWN_PART.fullmatch(text)
         if not m:
+            raise Unsupported
+        if chars_only and not (m["base"].startswith("Character") and not m["base"].startswith("Characters or")
+                               or m["types"] and not m["tl"]):
             raise Unsupported
         parts.append(m)
 
@@ -826,7 +1050,7 @@ def _own_candidates(who: str):
         base = m["base"]
         if base == "Leader":
             pool = [g.players[p].leader]
-        elif base.startswith("Character") and not base.startswith("Characters or") or m["types"]:
+        elif (base.startswith("Character") and not base.startswith("Characters or") or m["types"]) and not m["tl"]:
             pool = g.characters(p)
         else:
             pool = g.leader_and_characters(p)
@@ -841,6 +1065,14 @@ def _own_candidates(who: str):
             if orname and not (c.category == Category.CHARACTER or c.name == orname.group(1)):
                 continue
             if m["inc"] and not _types_include(c, m["inc"]):
+                continue
+            if m["both"] and not (m["both"] in c.d.types and c.d.trigger_text):
+                continue
+            if m["attr"] and not ({m["attr"], m["attr2"]} & set(c.d.attributes)):
+                continue
+            if m["pw"] and g.power(c) > int(m["pw"]):
+                continue
+            if m["cmin"] and g.cost(c) < int(m["cmin"]):
                 continue
             out.append(c)
         return out
@@ -878,7 +1110,13 @@ def t_grant(m):
 
 def t_leader_buff(m):
     v, dur = int(m["v"]), m["dur"]
-    return _simple(lambda g, src: g.add_power(g.players[src.owner].leader, v, dur, by=src.owner))
+    types = re.findall(r"\{([^}]+)\}", m["types"] or "")
+
+    def fn(g, src):
+        leader = g.players[src.owner].leader
+        if not types or any(t in leader.d.types for t in types):
+            g.add_power(leader, v, dur, by=src.owner)
+    return _simple(fn)
 
 
 def t_leader_keyword(m):
@@ -895,6 +1133,7 @@ def t_leader_keyword(m):
 
 def t_leader_base_power(m):
     v, who = int(m["v"]), m["who"] or ""
+    until = "turn" if m["dur"] else "next_end"
 
     def fn(g, src):
         leader = g.players[src.owner].leader
@@ -904,7 +1143,7 @@ def t_leader_base_power(m):
             return
         if who == "monocolored" and len(leader.d.colors) != 1:
             return
-        g.set_base_power(leader, v, "next_end", by=src.owner)
+        g.set_base_power(leader, v, until, by=src.owner)
     return _simple(fn)
 
 
@@ -986,12 +1225,13 @@ def t_char_to_life(m):
 
 
 def t_hand_to_life(m):
-    n, pred = int(m["n"]), parse_filter(m["f"])
+    n, pred, up = int(m["n"]), parse_filter(m["f"]), bool(m["fu"])
 
     def run(g, src):
         hand = g.players[src.owner].hand
-        for c in (yield from g.choose_cards(src.owner, [c for c in hand if pred(c)], n, "Add to Life face-up")):
-            g.move(c, "life", face_up=True)
+        prompt = "Add to Life face-up" if up else "Add to Life"
+        for c in (yield from g.choose_cards(src.owner, [c for c in hand if pred(c)], n, prompt)):
+            g.move(c, "life", face_up=up)
     return run
 
 
@@ -1011,8 +1251,23 @@ TEMPLATES: list[tuple[str, Callable]] = [
     (rf"Rest up to {OPP}\.", t_rest),
     (r"Rest all of your opponent's Characters\.", t_rest_all),
     (rf"Up to {OPP} cannot attack until the end of your opponent's next End Phase\.", t_cannot_attack),
+    (rf"Up to {OPP} will not become active in your opponent's next Refresh Phase\.", t_skip_refresh),
+    (rf"Negate the effect of up to {OPP} during this turn(?P<ret>, and return it to the owner's hand)?\.", t_negate),
+    (rf"K\.O\. or rest up to {OPP}\.", t_ko_or_rest),
+    (r"Rest up to (?P<n>\d+) of your opponent's Characters with a cost equal to or less than the total of your "
+     r"and your opponent's Life cards\.", t_rest_by_life),
     (r"Give up to (?P<n>\d+) of your opponent's (?P<rested>rested )?(?P<who>Leader or Character cards|"
-     r"Leader or Characters|Characters) -(?P<v>\d+) (?P<what>power|cost) during this turn\.", t_debuff),
+     r"Leader or Characters|Characters)(?: with (?P<minpw>\d+) power or more)? -(?P<v>\d+) (?P<what>power|cost) "
+     r"(?:during this turn|until the end of your opponent's (?P<next>next) End Phase)\.", t_debuff),
+    (r"Give up to (?P<n>\d+) Characters? (?P<sign>[+-])(?P<v>\d+) power during this turn\.", t_give_any),
+    (r"Give your opponent's Leader -(?P<v>\d+) power during this turn\.", t_opp_leader_debuff),
+    (r"K\.O\. up to (?P<n>\d+) of your (?P<who>.+?)\.", t_ko_own),
+    (r"All of your Characters with (?P<bp>\d+) base power or less gain \+(?P<v>\d+) power "
+     r"(?:during this (?P<dur>battle|turn)|until the end of your opponent's next End Phase)\.", t_buff_all),
+    (r"All of your Characters with (?P<bp>\d+) base power and the \{(?P<t>[^}]+)\} type cannot be K\.O\.'d in "
+     r"battle until the end of your opponent's next End Phase\.", t_protect_all),
+    (r"All of your opponent's Characters with a cost of (?P<c>\d+) cannot activate \[Blocker\] during this turn\.",
+     t_no_blocker_all),
     (r"Give all of your opponent's Characters -(?P<v>\d+) (?P<what>power|cost) during this turn\.", t_debuff_all),
     (r"Return up to (?P<n>\d+) (?P<opp>of your opponent's )?Characters?"
      r"(?: with a cost of (?P<cost>\d+) or less| with a \[Trigger\](?P<trig>))? to the owner's (?P<where>hand)\.",
@@ -1030,7 +1285,7 @@ TEMPLATES: list[tuple[str, Callable]] = [
     (r"Draw (?P<d>\d+) cards? and trash (?P<t>\d+) cards? from your hand\.", t_draw_trash),
     (r"Draw (?P<d>\d+) cards?(?:\.|,? and )", t_draw),
     (r"Trash (?P<t>\d+) cards? from your hand\.", t_trash_hand),
-    (r"Your opponent trashes (?P<n>\d+) cards? from their hand\.", t_opp_trashes),
+    (r"(?:Your opponent trashes|They trash) (?P<n>\d+) cards? from their hand\.", t_opp_trashes),
     (r"Trash (?P<n>\d+) cards? from your opponent's hand\.", t_trash_opp_hand),
     (r"Your opponent places (?P<n>\d+) cards? from their hand at the bottom of their deck(?: in any order)?\.",
      t_opp_bottoms),
@@ -1044,13 +1299,15 @@ TEMPLATES: list[tuple[str, Callable]] = [
     (r"Set up to (?P<n>\d+) of your DON!! cards as active\.", t_set_don_active),
     (r"Give up to (?P<n>\d+) rested DON!! cards? to your (?:\[(?P<name>[^\]]+)\] )?Leader"
      r"(?P<or> or \d+ of your Characters)?\.", t_give_rested_don),
+    (r"Give up to (?P<n>\d+) rested DON!! cards? to 1 of your (?P<who>.+?)\.", t_give_rested_don_to),
     (rf"Set up to (?P<n>\d+) of your {WHO} as active\.", t_set_active),
     (rf"Up to (?P<n>\d+) of your {WHO} gains? \+(?P<v>\d+) power during this (?P<dur>battle|turn)\.", t_buff),
     (rf"Up to (?P<n>\d+) of your {WHO} gains? \[(?P<kw>[^\]]+)\] during this turn\.", t_grant),
-    (r"Your Leader gains \+(?P<v>\d+) power during this (?P<dur>battle|turn)\.", t_leader_buff),
+    (r"Your (?:(?P<types>\{[^}]+\}(?: or \{[^}]+\})*) type )?Leader gains \+(?P<v>\d+) power during this "
+     r"(?P<dur>battle|turn)\.", t_leader_buff),
     (r"Your (?:\[(?P<name>[^\]]+)\] )?Leader gains \[(?P<kw>[^\]]+)\] during this turn\.", t_leader_keyword),
     (r"Your (?:(?P<who>\[[^\]]+\]|\{[^}]+\} type|monocolored) )?Leader's base power becomes (?P<v>\d+) "
-     r"until the end of your opponent's next End Phase\.", t_leader_base_power),
+     r"(?:until the end of your opponent's next End Phase|during this (?P<dur>turn))\.", t_leader_base_power),
     (r"This (?:Character|Leader|card) gains (?:\[(?P<kw>[^\]]+)\])?(?: and )?(?:\+(?P<v>\d+) power)? "
      r"(?:during this (?P<dur>battle|turn)|until the end of your opponent's next End Phase)\.", t_self_gain),
     (r"Your opponent cannot activate \[Blocker\] during this battle\.", t_unblockable),
@@ -1058,12 +1315,14 @@ TEMPLATES: list[tuple[str, Callable]] = [
     (r"Activate this card's \[(?P<t>[^\]]+)\] effect\.", t_activate_own),
     (r"Look at (?P<n>\d+) cards? from the top of your deck and place them at the top or bottom of the deck "
      r"in any order\.", t_scry),
-    (r"Look at (?P<n>\d+) cards? from the top of your deck; reveal up to (?P<k>\d+) (?P<f>.+?) and add (?:it|them) "
-     r"to your hand\. Then, (?P<rest>place the rest at the bottom of your deck in any order|trash the rest)\.", t_look),
+    (r"Look at (?P<n>\d+) cards? from the top of your deck; reveal up to (?:a total of )?(?P<k>\d+) (?P<f>.+?) and "
+     r"add (?:it|them) to your hand(?:\. Then,|, then) "
+     r"(?P<rest>place the rest at the bottom of your deck in any order|trash the rest)\.", t_look),
     (r"Play up to (?P<n>\d+) (?P<f>[^.]+?) from your (?P<zone>hand or trash|hand|trash)(?P<rested> rested)?\.",
      t_play_from),
     (r"Add up to (?P<n>\d+) (?P<f>[^.]+?) from your trash to your hand\.", t_trash_to_hand),
     (r"(?:Add|Place) up to (?P<n>\d+) (?P<opp>of your opponent's )?Characters? with a cost of (?P<cost>\d+) or less "
      r"(?:to|at) the top or bottom of (?:the owner's|your opponent's|their) Life cards face-up\.", t_char_to_life),
-    (r"Add up to (?P<n>\d+) (?P<f>[^.]+?) from your hand to the top of your Life cards face-up\.", t_hand_to_life),
+    (r"Add up to (?P<n>\d+) (?P<f>[^.]+?) from your hand to the top of your Life cards(?P<fu> face-up)?\.",
+     t_hand_to_life),
 ]

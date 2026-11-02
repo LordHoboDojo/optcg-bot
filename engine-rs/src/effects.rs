@@ -10,6 +10,7 @@ pub type CondFn = for<'a, 'b> fn(&'b Eng<'a>, Uid) -> bool;
 pub type CardNumFn = for<'a, 'b> fn(&'b Eng<'a>, Uid, Uid) -> i32;
 pub type CardOptFn = for<'a, 'b> fn(&'b Eng<'a>, Uid, Uid) -> Option<i32>;
 pub type HandOptFn = for<'a, 'b> fn(&'b Eng<'a>, Uid) -> Option<i32>;
+pub type KoFilterFn = for<'a, 'b> fn(&'b Eng<'a>, Uid, Uid) -> bool;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dir {
@@ -49,6 +50,14 @@ pub enum Cond {
     CharsWithTrigger(usize),
     PlayedThisTurn,
     FaceUpLife,
+    OppHand(i32, Dir),
+    MyTrashAtLeast(usize),
+    NoCharCostAtLeast(i32),
+    LeaderHasAttr(String),
+    OppCharBasePowerAtLeast(i32),
+    OppCharCostIs(i32),
+    /// the number of DON!! on your field is at least N less than on your opponent's
+    DonBehindBy(i32),
     /// The [DON!! xX] / [Your Turn] / [Opponent's Turn] checks of a permanent effect.
     Spec { don_req: u32, your_turn: bool, opp_turn: bool, extra: Option<Box<Cond>> },
     /// Costs paid while resolving can be paid (effect_text._wrap_costs's `payable`).
@@ -67,9 +76,13 @@ pub enum Filter {
         inc: Option<String>,
         trig: bool,
         cost: Option<(i32, Dir)>,
-        power_max: Option<i32>,
+        /// (value, "or less"); without "or less" the power must be exactly the value
+        power: Option<(i32, bool)>,
+        attr: Option<String>,
         excl: Option<String>,
     },
+    /// "[Megalo] or {Neptunian} type cards": either, and not named `excl`
+    Either { left: Box<Filter>, right: Box<Filter>, excl: Option<String> },
 }
 
 /// "N of your opponent's (rested) Characters with a (base) cost of X (or less) / X (base) power or less".
@@ -95,6 +108,14 @@ pub struct OwnPart {
     pub name: Option<String>,
     pub orname: Option<String>,
     pub inc: Option<String>,
+    /// "with both the {X} type and a [Trigger]"
+    pub both: Option<String>,
+    /// "with the <A> (or <B>) attribute"
+    pub attrs: Vec<String>,
+    /// current power at most
+    pub power_max: Option<i32>,
+    /// current cost at least
+    pub cost_min: Option<i32>,
 }
 
 /// Costs paid while resolving (effect_text._wrap_costs).
@@ -106,6 +127,13 @@ pub struct Costs {
     pub rest_cards: usize,
     pub life_face_up: usize,
     pub trash_self: bool,
+    pub life_face_down: usize,
+    pub give_leader_don: u32,
+    pub return_active_don: u32,
+    /// rest your Leader, which must have this name
+    pub rest_leader: Option<String>,
+    pub ko_own: Option<(usize, Vec<OwnPart>)>,
+    pub trash_own: Option<(usize, Vec<OwnPart>)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,7 +156,18 @@ pub enum Tpl {
     RestAll,
     CannotAttack { n: usize, pred: OppPred },
     KoStage { n: usize },
-    Debuff { n: usize, v: i32, cost: bool, with_leader: bool, rested: bool },
+    Debuff { n: usize, v: i32, cost: bool, with_leader: bool, rested: bool, min_power: Option<i32>, until: Until },
+    GiveAny { n: usize, v: i32, label: String },
+    OppLeaderDebuff { v: i32 },
+    SkipRefresh { n: usize, pred: OppPred },
+    Negate { n: usize, pred: OppPred, back: bool },
+    KoOrRest { n: usize, pred: OppPred },
+    RestByLife { n: usize },
+    KoOwn { n: usize, who: Vec<OwnPart> },
+    BuffAll { bp: i32, v: i32, until: Until },
+    ProtectAll { bp: i32, t: String },
+    NoBlockerAll { cost: i32 },
+    GiveRestedDonTo { n: u32, who: Vec<OwnPart> },
     DebuffAll { v: i32, cost: bool },
     Bounce { n: usize, opp_only: bool, to: Where, cost: Option<i32>, trig: bool },
     DrawTrash { d: usize, t: usize },
@@ -145,9 +184,9 @@ pub enum Tpl {
     GiveRestedDon { n: u32, chars: bool, name: Option<String> },
     Buff { n: usize, v: i32, until: Until, who: Vec<OwnPart> },
     Grant { n: usize, kw: Kw, who: Vec<OwnPart> },
-    LeaderBuff { v: i32, until: Until },
+    LeaderBuff { v: i32, until: Until, types: Vec<String> },
     LeaderKeyword { kw: Kw, name: Option<String> },
-    LeaderBasePower { v: i32, who: String },
+    LeaderBasePower { v: i32, who: String, until: Until },
     Unblockable,
     PlaySelf,
     ActivateOwn { timing: Timing },
@@ -155,7 +194,7 @@ pub enum Tpl {
     Scry { n: usize },
     PlayFrom { n: usize, hand: bool, trash: bool, hand_first: bool, rested: bool, pred: Filter },
     CharToLife { n: usize, opp_only: bool, cost: i32 },
-    HandToLife { n: usize, pred: Filter },
+    HandToLife { n: usize, pred: Filter, face_up: bool },
     TrashToHand { n: usize, pred: Filter },
 }
 
@@ -190,6 +229,16 @@ pub struct Replacement {
     pub pay: for<'a, 'b> fn(&'b mut Eng<'a>, Uid, Uid) -> R<()>,
     pub payable: CondFn,
     pub text: String,
+    pub once_per_turn: bool,
+}
+
+/// "If you would take damage, ... instead" (applies to `player`'s damage).
+#[derive(Clone)]
+pub struct DamageReplacement {
+    pub applies: for<'a, 'b> fn(&'b Eng<'a>, Uid, u8) -> bool,
+    pub pay: BodyFn,
+    pub payable: CondFn,
+    pub text: String,
 }
 
 /// Permanent effects of a card (the static_* / hand_* / attack_lock fields of CardDef in Python).
@@ -204,6 +253,7 @@ pub struct Statics {
     pub hand_counter: Option<HandOptFn>,
     pub attack_lock: Option<CondFn>,
     pub replacements: Vec<Replacement>,
+    pub damage_replacements: Vec<DamageReplacement>,
 }
 
 fn until_of(dur: &str) -> Until {
@@ -253,6 +303,13 @@ impl<'a> Eng<'a> {
             }
             Cond::PlayedThisTurn => self.c(src).played_turn == self.s.turn_number,
             Cond::FaceUpLife => self.ps(me).life.iter().any(|&c| self.c(c).face_up),
+            Cond::OppHand(n, d) => d.ok(self.ps(1 - me).hand.len() as i32, *n),
+            Cond::MyTrashAtLeast(n) => self.ps(me).trash.len() >= *n,
+            Cond::NoCharCostAtLeast(n) => !self.characters(me).into_iter().any(|c| self.cost(c) >= *n),
+            Cond::LeaderHasAttr(a) => self.d(leader()).attributes.contains(a),
+            Cond::OppCharBasePowerAtLeast(n) => self.characters(1 - me).into_iter().any(|c| self.base_power(c) >= *n),
+            Cond::OppCharCostIs(n) => self.characters(1 - me).into_iter().any(|c| self.cost(c) == *n),
+            Cond::DonBehindBy(n) => self.don_on_field(1 - me) as i32 - self.don_on_field(me) as i32 >= *n,
             Cond::Spec { don_req, your_turn, opp_turn, extra } => {
                 if *don_req > 0 && self.c(src).don < *don_req {
                     return false;
@@ -276,7 +333,10 @@ impl<'a> Eng<'a> {
             Filter::Names { names, cost } => {
                 names.iter().any(|n| *n == d.name) && cost.map_or(true, |(n, dir)| dir.ok(d.cost, n))
             }
-            Filter::General { color, types, cat, inc, trig, cost, power_max, excl } => {
+            Filter::Either { left, right, excl } => {
+                (self.filter_ok(left, u) || self.filter_ok(right, u)) && excl.as_ref().map_or(true, |x| d.name != *x)
+            }
+            Filter::General { color, types, cat, inc, trig, cost, power, attr, excl } => {
                 if let Some(col) = color {
                     if !d.colors.contains(col) {
                         return false;
@@ -303,8 +363,13 @@ impl<'a> Eng<'a> {
                         return false;
                     }
                 }
-                if let Some(p) = power_max {
-                    if d.power > *p {
+                if let Some((p, or_less)) = power {
+                    if if *or_less { d.power > *p } else { d.power != *p } {
+                        return false;
+                    }
+                }
+                if let Some(a) = attr {
+                    if !d.attributes.contains(a) {
                         return false;
                     }
                 }
@@ -336,7 +401,7 @@ impl<'a> Eng<'a> {
         self.characters(1 - self.owner(src)).into_iter().filter(|&c| self.opp_ok(p, c)).collect()
     }
 
-    fn own_candidates(&self, parts: &[OwnPart], p: u8) -> Vec<Uid> {
+    pub fn own_candidates(&self, parts: &[OwnPart], p: u8) -> Vec<Uid> {
         let mut out: Vec<Uid> = vec![];
         for part in parts {
             let pool = match part.pool {
@@ -358,6 +423,18 @@ impl<'a> Eng<'a> {
                     }
                 }
                 if part.inc.as_ref().map_or(false, |i| !d.type_includes(i)) {
+                    continue;
+                }
+                if part.both.as_ref().map_or(false, |t| !(d.has_type(t) && !d.trigger_text.is_empty())) {
+                    continue;
+                }
+                if !part.attrs.is_empty() && !part.attrs.iter().any(|a| d.attributes.contains(a)) {
+                    continue;
+                }
+                if part.power_max.map_or(false, |p| self.power(c) > p) {
+                    continue;
+                }
+                if part.cost_min.map_or(false, |m| self.cost(c) < m) {
                     continue;
                 }
                 if !out.contains(&c) {
@@ -444,6 +521,32 @@ impl<'a> Eng<'a> {
         if k.trash_self && !matches!(self.c(src).zone, Some(Zone::Character) | Some(Zone::Stage)) {
             return false;
         }
+        // likewise turning face-down cards that already are (1-3-2-1)
+        if k.life_face_down > 0 {
+            let n = k.life_face_down;
+            if ps.life.len() < n || !ps.life[ps.life.len() - n..].iter().all(|&c| self.c(c).face_up) {
+                return false;
+            }
+        }
+        let don = k.give_leader_don.max(k.return_active_don);
+        if don > 0 && ps.don_active < don {
+            return false;
+        }
+        if let Some(name) = &k.rest_leader {
+            if self.name(ps.leader) != name || self.c(ps.leader).rested {
+                return false;
+            }
+        }
+        if let Some((n, who)) = &k.ko_own {
+            if self.own_candidates(who, me).len() < *n {
+                return false;
+            }
+        }
+        if let Some((n, who)) = &k.trash_own {
+            if self.own_candidates(who, me).len() < *n {
+                return false;
+            }
+        }
         true
     }
 
@@ -482,6 +585,43 @@ impl<'a> Eng<'a> {
         }
         if k.trash_self {
             self.mv(src, Zone::Trash);
+        }
+        if k.life_face_down > 0 {
+            let life = &self.ps(me).life;
+            for c in life[life.len() - k.life_face_down..].to_vec() {
+                self.cm(c).face_up = false;
+            }
+        }
+        if k.give_leader_don > 0 {
+            let l = self.ps(me).leader;
+            self.give_don(me, l, k.give_leader_don, false);
+        }
+        if k.return_active_don > 0 {
+            let ps = self.psm(me);
+            ps.don_active -= k.return_active_don;
+            ps.don_deck += k.return_active_don;
+            let field = self.ps(me).field();
+            self.fire(Timing::DonReturned, &field);
+        }
+        if k.rest_leader.is_some() {
+            let l = self.ps(me).leader;
+            self.cm(l).rested = true;
+        }
+        if let Some((n, who)) = &k.ko_own {
+            // 8-3-1-7: a K.O. that is replaced or prevented doesn't pay the cost
+            let cands = self.own_candidates(who, me);
+            for c in self.choose_cards(me, cands, *n, "K.O. for the cost", true)? {
+                self.ko(c, Some(me), true, false)?;
+                if self.c(c).zone != Some(Zone::Trash) {
+                    return Ok(());
+                }
+            }
+        }
+        if let Some((n, who)) = &k.trash_own {
+            let cands = self.own_candidates(who, me);
+            for c in self.choose_cards(me, cands, *n, "Trash for the cost", true)? {
+                self.mv(c, Zone::Trash);
+            }
         }
         self.run(body, src)
     }
@@ -614,16 +754,103 @@ impl<'a> Eng<'a> {
                     self.mv(c, Zone::Trash);
                 }
             }
-            Tpl::Debuff { n, v, cost, with_leader, rested } => {
+            Tpl::Debuff { n, v, cost, with_leader, rested, min_power, until } => {
                 let pool = if *with_leader { self.leader_and_characters(o) } else { self.characters(o) };
-                let cands = pool.into_iter().filter(|&c| self.c(c).rested || !rested).collect();
+                let cands = pool
+                    .into_iter()
+                    .filter(|&c| (self.c(c).rested || !rested) && min_power.map_or(true, |m| self.power(c) >= m))
+                    .collect();
                 let what = if *cost { "cost" } else { "power" };
                 for c in self.choose_cards(me, cands, *n, &format!("Give -{v} {what}"), false)? {
                     if *cost {
-                        self.add_cost(c, -v, Until::Turn, Some(me));
+                        self.add_cost(c, -v, *until, Some(me));
                     } else {
-                        self.add_power(c, -v, Until::Turn, Some(me));
+                        self.add_power(c, -v, *until, Some(me));
                     }
+                }
+            }
+            Tpl::GiveAny { n, v, label } => {
+                let mut cands = self.characters(me);
+                cands.extend(self.characters(o));
+                for c in self.choose_cards(me, cands, *n, label, false)? {
+                    self.add_power(c, *v, Until::Turn, Some(me));
+                }
+            }
+            Tpl::OppLeaderDebuff { v } => {
+                let l = self.ps(o).leader;
+                self.add_power(l, -v, Until::Turn, Some(me));
+            }
+            Tpl::SkipRefresh { n, pred } => {
+                let cands = self.opp_targets(src, pred);
+                for c in self.choose_cards(me, cands, *n, "Won't become active next Refresh Phase", false)? {
+                    self.skip_next_refresh(c, me);
+                }
+            }
+            Tpl::Negate { n, pred, back } => {
+                let cands = self.opp_targets(src, pred);
+                for c in self.choose_cards(me, cands, *n, "Negate the effect", false)? {
+                    self.negate(c, Until::Turn, Some(me));
+                    if *back {
+                        self.remove_from_field(c, Zone::Hand, Some(me), false, false)?;
+                    }
+                }
+            }
+            Tpl::KoOrRest { n, pred } => {
+                let cands = self.opp_targets(src, pred);
+                for c in self.choose_cards(me, cands, *n, "K.O. or rest a Character", false)? {
+                    let name = self.name(c);
+                    let opts = vec![
+                        Action::new(ActKind::Select).index(0).label(self.lbl(|| format!("K.O. {name}"))),
+                        Action::new(ActKind::Select).index(1).label(self.lbl(|| format!("Rest {name}"))),
+                    ];
+                    if self.choose(me, DecisionKind::Select, opts, "K.O. or rest it?")?.index == Some(0) {
+                        self.ko(c, Some(me), true, false)?;
+                    } else {
+                        self.cm(c).rested = true;
+                    }
+                }
+            }
+            Tpl::RestByLife { n } => {
+                let limit = (self.ps(0).life.len() + self.ps(1).life.len()) as i32;
+                let cands = self.characters(o).into_iter().filter(|&c| self.cost(c) <= limit).collect();
+                for c in self.choose_cards(me, cands, *n, "Rest a Character", false)? {
+                    self.cm(c).rested = true;
+                }
+            }
+            Tpl::KoOwn { n, who } => {
+                let cands = self.own_candidates(who, me);
+                for c in self.choose_cards(me, cands, *n, "K.O. a Character", false)? {
+                    self.ko(c, Some(me), true, false)?;
+                }
+            }
+            Tpl::BuffAll { bp, v, until } => {
+                for c in self.characters(me) {
+                    if self.base_power(c) <= *bp {
+                        self.add_power(c, *v, *until, Some(me));
+                    }
+                }
+            }
+            Tpl::ProtectAll { bp, t } => {
+                for c in self.characters(me) {
+                    if self.base_power(c) == *bp && self.d(c).has_type(t) {
+                        self.grant_keyword(c, Kw::NoKoInBattle, Until::NextEnd, Some(me));
+                    }
+                }
+            }
+            Tpl::NoBlockerAll { cost } => {
+                for c in self.characters(o) {
+                    if self.cost(c) == *cost {
+                        self.grant_keyword(c, Kw::NoBlocker, Until::Turn, Some(me));
+                    }
+                }
+            }
+            Tpl::GiveRestedDonTo { n, who } => {
+                if self.ps(me).don_rested == 0 {
+                    return Ok(());
+                }
+                let cands = self.own_candidates(who, me);
+                for c in self.choose_cards(me, cands, 1, "Give rested DON!!", false)? {
+                    self.give_don(me, c, *n, true);
                 }
             }
             Tpl::DebuffAll { v, cost } => {
@@ -724,9 +951,11 @@ impl<'a> Eng<'a> {
                     self.grant_keyword(c, *kw, Until::Turn, Some(me));
                 }
             }
-            Tpl::LeaderBuff { v, until } => {
+            Tpl::LeaderBuff { v, until, types } => {
                 let l = self.ps(me).leader;
-                self.add_power(l, *v, *until, Some(me));
+                if types.is_empty() || types.iter().any(|t| self.d(l).has_type(t)) {
+                    self.add_power(l, *v, *until, Some(me));
+                }
             }
             Tpl::LeaderKeyword { kw, name } => {
                 let l = self.ps(me).leader;
@@ -734,7 +963,7 @@ impl<'a> Eng<'a> {
                     self.grant_keyword(l, *kw, Until::Turn, Some(me));
                 }
             }
-            Tpl::LeaderBasePower { v, who } => {
+            Tpl::LeaderBasePower { v, who, until } => {
                 let l = self.ps(me).leader;
                 let d = self.d(l);
                 if who.starts_with('[') && d.name != who[1..who.len() - 1] {
@@ -746,7 +975,7 @@ impl<'a> Eng<'a> {
                 if who == "monocolored" && d.colors.len() != 1 {
                     return Ok(());
                 }
-                self.set_base_power(l, *v, Until::NextEnd, Some(me));
+                self.set_base_power(l, *v, *until, Some(me));
             }
             Tpl::Unblockable => self.grant_keyword(src, Kw::Unblockable, Until::Battle, Some(me)),
             Tpl::PlaySelf => {
@@ -817,10 +1046,11 @@ impl<'a> Eng<'a> {
                     self.remove_from_field(c, Zone::Life, Some(me), bottom, true)?;
                 }
             }
-            Tpl::HandToLife { n, pred } => {
+            Tpl::HandToLife { n, pred, face_up } => {
                 let cands = self.ps(me).hand.iter().copied().filter(|&c| self.filter_ok(pred, c)).collect();
-                for c in self.choose_cards(me, cands, *n, "Add to Life face-up", false)? {
-                    self.move_card(c, Some(Zone::Life), false, true);
+                let prompt = if *face_up { "Add to Life face-up" } else { "Add to Life" };
+                for c in self.choose_cards(me, cands, *n, prompt, false)? {
+                    self.move_card(c, Some(Zone::Life), false, *face_up);
                 }
             }
             Tpl::TrashToHand { n, pred } => {

@@ -196,10 +196,21 @@ Checkpoints are tied to the card list in `data/cards.json`; retrain after refres
 
 ## Known simplifications
 
-- Replacement effects ("instead") work only for a card leaving the field or being K.O.'d (`CardDef.replacements`), and the first one the owner accepts is used.
+- Replacement effects ("instead") work for a card leaving the field or being K.O.'d (`CardDef.replacements`) and for taking damage (`CardDef.damage_replacements`); the first one the owner accepts is used.
+- Readings the Comprehensive Rules don't settle, chosen and kept consistent:
+  - "If you would take damage ... instead" (EB05-052 Gloriosa) is offered for each point of damage,
+    since 4-6-2-2 processes X damage as X single points, including the one that would defeat you.
+  - "Removed from the field by your opponent" (EB05-061 Nami) covers their effects and a K.O. in
+    battle; 36 other cards say "by your opponent's effect" when they mean effects only.
+  - A cost that is replaced or prevented (a K.O. stopped by "cannot be K.O.'d" or by a replacement
+    effect) cancels the effect after the colon (8-3-1-7). Trashing your own Characters as a cost
+    moves them directly, without offering replacement effects.
+  - "A card or B card" filters are split only when nothing else qualifies them; "yellow Character
+    or Stage card with a cost of 2 or less" stays unimplemented rather than guessing what each
+    qualifier covers.
 - Infinite loops (11-1) aren't detected; `play_game` gives up after 20,000 decisions.
 - Card text using the new timings (start of turn, start of Main Phase, end of battle) isn't compiled yet; only scripts can use them. Each appears on about one card.
-- No fast state cloning for search bots yet. Replaying `g.history` with the same seed rebuilds a game.
+- No fast state cloning in the Python engine; the Rust engine (`engine-rs/`) has `fork()`.
 - `GreedyAgent` is a yardstick, not a good player: it spends every spare DON!! on its Leader, never
   blocks or counters subtly, and its attacks are shallow. Lopsided deck matchups under greedy play
   usually say more about the heuristic than about the cards.

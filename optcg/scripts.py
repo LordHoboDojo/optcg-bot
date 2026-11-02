@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .actions import Action
-from .cards import Category, Effect, Replacement, Timing
+from .cards import BLOCKER, Category, Effect, Replacement, Timing
 
 
 @dataclass(frozen=True)
@@ -290,3 +290,47 @@ def xebec_character():
 def loki():
     return {"static_cost": lambda g, src, card: 12 if card is src else 0,
             "static_power": lambda g, src, card: 3000 if card is src and g.turn_player != src.owner else 0}
+
+
+# ---------------------------------------------------------------- EB-05
+
+@script("EB05-010", covers="When one of your Characters")
+def robin_leader():
+    """[Once Per Turn] When one of your Characters with the <Wisdom> attribute and without [Blocker]
+    is K.O.'d, add up to 1 card from the top of your deck to the top of your Life cards."""
+    from .effect_text import parse_body
+    run = parse_body("Add up to 1 card from the top of your deck to the top of your Life cards.")
+
+    def wise(g, src, card):
+        return card.category == Category.CHARACTER and "Wisdom" in card.d.attributes and not g.has_keyword(card, BLOCKER)
+
+    return {"effects": (Effect(Timing.ALLY_KO, run, "When a <Wisdom> Character without [Blocker] is K.O.'d: "
+                               "top of deck to Life", once_per_turn=True, ko_filter=wise),)}
+
+
+@script("EB05-052", covers="If you would take damage")
+def gloriosa():
+    """If you would take damage, you may trash this Character instead. Offered for each point of
+    damage, including the one that would defeat you at 0 Life."""
+    def pay(g, src):
+        g.move(src, "trash")
+        yield from ()
+    return {"damage_replacements": (Replacement(lambda g, src, player: src.owner == player, pay,
+                                                lambda g, src: src.zone == "character", "Trash Gloriosa"),)}
+
+
+@script("EB05-061", covers="would be removed from the field by your opponent")
+def nami_life():
+    """[Once Per Turn] If one of your Characters with 6000 base power or less would be removed from the
+    field by your opponent, you may add 1 card from the top of your Life cards to your hand instead.
+    "By your opponent" (not "by your opponent's effect", as on 36 other cards) also covers a K.O.
+    in battle, which only ever happens to the defending player's Characters."""
+    def applies(g, src, card, by, ko):
+        return (card.owner == src.owner and card.zone == "character" and g.base_power(card) <= 6000
+                and (by == 1 - src.owner or (ko and by is None)))
+
+    def pay(g, src, card):
+        g.move(g.players[src.owner].life[-1], "hand")
+        yield from ()
+    return {"replacements": (Replacement(applies, pay, lambda g, src: bool(g.players[src.owner].life),
+                                         "Add the top Life card to your hand", once_per_turn=True),)}

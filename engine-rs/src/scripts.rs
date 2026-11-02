@@ -33,6 +33,9 @@ pub fn script(id: &str) -> Option<Script> {
         "OP17-112" => s(Some(&["The base power"]), linlin_base_power),
         "OP17-118" => s(None, xebec_character),
         "OP17-119" => s(Some(&["+12 cost"]), loki),
+        "EB05-010" => s(Some(&["When one of your Characters"]), robin_leader),
+        "EB05-052" => s(Some(&["If you would take damage"]), gloriosa),
+        "EB05-061" => s(Some(&["would be removed from the field by your opponent"]), nami_life),
         _ => None,
     }
 }
@@ -162,6 +165,7 @@ fn marco(d: &mut CardDef) -> Vec<Effect> {
             pay: |e, src, _| e.ko(src, Some(e.owner(src)), false, false),
             payable: |e, src| e.c(src).zone == Some(Zone::Character),
             text: "K.O. Marco".into(),
+            once_per_turn: false,
         },
     )
 }
@@ -174,6 +178,7 @@ fn crone_oli(d: &mut CardDef) -> Vec<Effect> {
             pay: |e, src, _| e.rest_your_cards(e.owner(src), 1),
             payable: |e, src| e.active_card_count(e.owner(src)) >= 1,
             text: "Rest 1 of your cards".into(),
+            once_per_turn: false,
         },
     )
 }
@@ -193,6 +198,7 @@ fn nami(d: &mut CardDef) -> Vec<Effect> {
             },
             payable: |e, src| e.c(src).zone == Some(Zone::Character) && !e.c(src).rested,
             text: "Rest Nami".into(),
+            once_per_turn: false,
         },
     )
 }
@@ -205,6 +211,7 @@ fn ganzui(d: &mut CardDef) -> Vec<Effect> {
             pay: trash_two,
             payable: hand_at_least_two,
             text: "Trash 2 cards from your hand".into(),
+            once_per_turn: false,
         },
     )
 }
@@ -217,6 +224,7 @@ fn kyo(d: &mut CardDef) -> Vec<Effect> {
             pay: trash_two,
             payable: hand_at_least_two,
             text: "Trash 2 cards from your hand".into(),
+            once_per_turn: false,
         },
     )
 }
@@ -234,6 +242,7 @@ fn zoro(d: &mut CardDef) -> Vec<Effect> {
             },
             payable: |e, src| e.ps(e.owner(src)).trash.len() >= 3,
             text: "Place 3 cards from your trash at the bottom of your deck".into(),
+            once_per_turn: false,
         },
     )
 }
@@ -405,4 +414,62 @@ fn loki(d: &mut CardDef) -> Vec<Effect> {
     d.st.power =
         Some(StaticNum::Script(|e, src, card| if card == src && e.s.turn_player != e.owner(src) { 3000 } else { 0 }));
     vec![]
+}
+
+// ---------------------------------------------------------------- EB-05
+
+/// [Once Per Turn] When one of your Characters with the <Wisdom> attribute and without [Blocker]
+/// is K.O.'d, add up to 1 card from the top of your deck to the top of your Life cards.
+fn robin_leader(_: &mut CardDef) -> Vec<Effect> {
+    let mut eff = Effect::new(
+        Timing::AllyKo,
+        Body::T(Tpl::DeckToLife { n: 1 }),
+        "When a <Wisdom> Character without [Blocker] is K.O.'d: top of deck to Life",
+    );
+    eff.once_per_turn = true;
+    eff.ko_filter = Some(|e, _src, card| {
+        let d = e.d(card);
+        d.category == Category::Character && d.attributes.iter().any(|a| a == "Wisdom") && !e.has_keyword(card, Kw::Blocker)
+    });
+    vec![eff]
+}
+
+/// If you would take damage, you may trash this Character instead (offered for each point of
+/// damage, including the one that would defeat you at 0 Life).
+fn gloriosa(d: &mut CardDef) -> Vec<Effect> {
+    d.st.damage_replacements = vec![DamageReplacement {
+        applies: |e, src, player| e.owner(src) == player,
+        pay: |e, src| {
+            e.mv(src, Zone::Trash);
+            Ok(())
+        },
+        payable: |e, src| e.c(src).zone == Some(Zone::Character),
+        text: "Trash Gloriosa".into(),
+    }];
+    vec![]
+}
+
+/// [Once Per Turn] If one of your Characters with 6000 base power or less would be removed from
+/// the field by your opponent (their effects, or a K.O. in battle), you may add 1 card from the top
+/// of your Life cards to your hand instead.
+fn nami_life(d: &mut CardDef) -> Vec<Effect> {
+    replacement(
+        d,
+        Replacement {
+            applies: |e, src, card, by, ko| {
+                e.owner(card) == e.owner(src)
+                    && e.c(card).zone == Some(Zone::Character)
+                    && e.base_power(card) <= 6000
+                    && (by == Some(1 - e.owner(src)) || (ko && by.is_none()))
+            },
+            pay: |e, src, _| {
+                let top = *e.ps(e.owner(src)).life.last().unwrap();
+                e.mv(top, Zone::Hand);
+                Ok(())
+            },
+            payable: |e, src| !e.ps(e.owner(src)).life.is_empty(),
+            text: "Add the top Life card to your hand".into(),
+            once_per_turn: true,
+        },
+    )
 }

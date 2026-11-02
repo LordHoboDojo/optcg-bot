@@ -75,6 +75,7 @@ fn card_from_json(j: &Value) -> Result<CardDef, String> {
         counter: n(j, "counter"),
         life: n(j, "life"),
         types: strs(j, "types"),
+        attributes: strs(j, "attributes"),
         keywords: comp.keywords,
         effects: comp.effects,
         st: Statics {
@@ -96,6 +97,8 @@ fn card_from_json(j: &Value) -> Result<CardDef, String> {
                 d.unimplemented.clear();
             }
             Some(covers) => {
+                // the script replaces the lines it covers, compiled or not
+                d.effects.retain(|e| !covers.iter().any(|c| e.text.contains(c)));
                 d.effects.extend(added);
                 d.unimplemented.retain(|u| !covers.iter().any(|c| u.contains(c)));
             }

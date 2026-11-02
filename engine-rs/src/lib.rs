@@ -16,9 +16,10 @@ use cards::*;
 use engine::{Eng, Game};
 
 /// Every keyword and marker, sorted by name (for snapshots).
-const ALL_KW: [Kw; 10] = [
+const ALL_KW: [Kw; 11] = [
     Kw::Banish,
     Kw::CannotAttack,
+    Kw::NoBlocker,
     Kw::NoKoByEffects,
     Kw::NoKoByOppEffects,
     Kw::NoKoInBattle,

@@ -23,6 +23,18 @@ class Parity(unittest.TestCase):
             self.assertEqual(list(d.unimplemented), db.unimplemented(cid), cid)
             self.assertEqual(len(d.effects), db.effect_count(cid), cid)
 
+    def test_eb05_decks_match(self):
+        """No official deck plays EB05, so these test decks are built around its cards."""
+        from rust_parity import set_decks
+        ds = set_decks("EB05")
+        names = sorted(ds)
+        rng = random.Random(4)
+        for i, a in enumerate(names):
+            b = names[(i + 3) % len(names)]
+            for policy in ("random", "greedy"):
+                with self.subTest(a=a, b=b, policy=policy):
+                    play_both((ds[a], ds[b]), i, policy, rng)
+
     def test_games_match_decision_by_decision(self):
         """State, options, prompts and log identical after every decision, both seats, all matchups."""
         ds = covered()

@@ -151,7 +151,7 @@ struct ParsedCosts {
     any_resolving: bool,
 }
 
-const COST_PARTS: [(&str, &str); 12] = [
+const COST_PARTS: [(&str, &str); 18] = [
     (r"([➀-➉①-⑩])\s*", "rest_don"),
     (r"DON!! -(\d+)\s*", "don_minus"),
     (r"You may rest (\d+) of your DON!! cards?\s*", "rest_don"),
@@ -162,7 +162,13 @@ const COST_PARTS: [(&str, &str); 12] = [
     (r"(?:You may )?add (\d+) cards? from the top of your Life cards to your hand\s*", "life"),
     (r"(?:You may )?rest (\d+) of your cards\s*", "rest_cards"),
     (r"(?:You may )?turn (\d+) cards? from the top of your Life cards face-up\s*", "life_face_up"),
-    (r"(?:You may )?reveal (\d+) (.+?) from your hand\s*", "reveal"),
+    (r"(?:You may )?turn (\d+) cards? from the top of your Life cards face-down\s*", "life_face_down"),
+    (r"(?:You may )?reveal (?:a total of )?(\d+) (.+?) from your hand\s*", "reveal"),
+    (r"(?:You may )?give (\d+) active DON!! cards? to 1 of your Leader\s*", "give_leader_don"),
+    (r"(?:You may )?return (\d+) of your active DON!! cards? to your DON!! deck\s*", "return_active_don"),
+    (r"(?:You may )?rest your Leader \[([^\]]+)\]\s*", "rest_leader"),
+    (r"(?:You may )?K\.O\. (\d+) of your (.+?)\s*$", "ko_own"),
+    (r"(?:You may )?trash (\d+) of your (.+?)\s*$", "trash_own"),
     (r"(?:and|,)\s*", ""),
 ];
 
@@ -205,6 +211,30 @@ fn parse_costs(prefix: &str) -> Res<ParsedCosts> {
                 }
                 "life_face_up" => {
                     c.k.life_face_up = num();
+                    c.any_resolving = true;
+                }
+                "life_face_down" => {
+                    c.k.life_face_down = num();
+                    c.any_resolving = true;
+                }
+                "give_leader_don" => {
+                    c.k.give_leader_don = num() as u32;
+                    c.any_resolving = true;
+                }
+                "return_active_don" => {
+                    c.k.return_active_don = num() as u32;
+                    c.any_resolving = true;
+                }
+                "rest_leader" => {
+                    c.k.rest_leader = Some(n().to_string());
+                    c.any_resolving = true;
+                }
+                "ko_own" => {
+                    c.k.ko_own = Some((num(), own_candidates(&m[2], true)?));
+                    c.any_resolving = true;
+                }
+                "trash_own" => {
+                    c.k.trash_own = Some((num(), own_candidates(&m[2], true)?));
                     c.any_resolving = true;
                 }
                 _ => {}
@@ -436,6 +466,30 @@ fn cond_part(clause: &str) -> Option<Cond> {
     if let Some(m) = rfull(r"you have (\d+) or (less|more) cards in your hand", clause) {
         return Some(Cond::MyHand(num(&m, 1), dir(&m[2])));
     }
+    if let Some(m) = rfull(r"your opponent has (\d+) or (less|more) cards in their hand", clause) {
+        return Some(Cond::OppHand(num(&m, 1), dir(&m[2])));
+    }
+    if let Some(m) = rfull(r"you have (\d+) or more cards in your trash", clause) {
+        return Some(Cond::MyTrashAtLeast(num(&m, 1) as usize));
+    }
+    if let Some(m) = rfull(r"you have no Characters with a cost of (\d+) or more", clause) {
+        return Some(Cond::NoCharCostAtLeast(num(&m, 1)));
+    }
+    if let Some(m) = rfull(r"your Leader has the <([^>]+)> attribute", clause) {
+        return Some(Cond::LeaderHasAttr(m[1].into()));
+    }
+    if let Some(m) = rfull(r"your opponent has a Character with (\d+) base power or more", clause) {
+        return Some(Cond::OppCharBasePowerAtLeast(num(&m, 1)));
+    }
+    if let Some(m) = rfull(r"your opponent has a Character with a cost of (\d+)", clause) {
+        return Some(Cond::OppCharCostIs(num(&m, 1)));
+    }
+    if let Some(m) = rfull(
+        r"the number of DON!! cards on your field is at least (\d+) less than the number on your opponent's field",
+        clause,
+    ) {
+        return Some(Cond::DonBehindBy(num(&m, 1)));
+    }
     if let Some(m) = rfull(r"you have (\d+) or more DON!! cards on your field", clause) {
         return Some(Cond::DonOnFieldAtLeast(num(&m, 1) as u32));
     }
@@ -491,6 +545,15 @@ pub fn parse_body(text: &str) -> Res<Body> {
         let otherwise = parse_body(&cap(&m[2]))?;
         return Ok(Body::UnlessOppTrashes(m[1].parse().unwrap(), Box::new(otherwise)));
     }
+    if let Some(m) = rfull(r"(You may [^:]+?):\s*(.+)", text) {
+        if let Ok(c) = parse_costs(&m[1]) {
+            let engine = c.rest_don.is_some() || c.don_minus.is_some() || c.rest_self;
+            if c.any_resolving && !engine {
+                let body = parse_body(&cap(&m[2]))?;
+                return Ok(Body::WithCosts { costs: Box::new(c.k), ask: true, body: Box::new(body) });
+            }
+        }
+    }
     if let Some(rest) = text.strip_prefix("You may ") {
         if rmatch(r"You may (trash|rest|add) .*:", text).is_none() {
             return Ok(Body::Optional(Box::new(parse_body(&cap(rest))?)));
@@ -540,42 +603,79 @@ pub fn parse_filter(f: &str) -> Res<Filter> {
         concat!(
             r"(?:(?P<color>red|green|blue|purple|black|yellow) )?",
             r"(?:(?P<types>\{[^}]+\}(?: or \{[^}]+\})*) type )?",
-            r"(?:(?P<cat>Character|Event|Stage)(?: cards?)?|cards?)",
+            r"(?:(?P<cat>Character|Event|Stage)s?(?: cards?)?|cards?)",
+            r"(?: with the <(?P<attr>[^>]+)> attribute)?",
             r#"(?: with a type including "(?P<inc>[^"]+)")?"#,
             r"(?P<trig> with a \[Trigger\])?",
             r"(?: with a cost of (?P<c>\d+)(?: or (?P<dir>more|less))?)?",
+            r"(?: and the <(?P<attr2>[^>]+)> attribute)?",
             r#"(?: and a type including "(?P<inc2>[^"]+)")?"#,
-            r"(?: with (?P<pw>\d+) power or less)?",
+            r"(?: with (?P<pw>\d+) power(?P<pwle> or less)?)?",
+            r"(?P<trig2> and a \[Trigger\])?",
             r"(?: other than \[(?P<excl>[^\]]+)\])?"
         ),
         f,
     ) else {
-        return Err(Unsupported);
+        return either_filter(f);
     };
     Ok(Filter::General {
         color: g(&m, "color").map(String::from),
         types: find_all(r"\{([^}]+)\}", g(&m, "types").unwrap_or("")),
         cat: g(&m, "cat").and_then(Category::parse),
         inc: g(&m, "inc").or_else(|| g(&m, "inc2")).map(String::from),
-        trig: g(&m, "trig").is_some(),
+        trig: g(&m, "trig").is_some() || g(&m, "trig2").is_some(),
         cost: g(&m, "c").map(|c| (c.parse().unwrap(), cost_dir(g(&m, "dir")))),
-        power_max: g(&m, "pw").map(|p| p.parse().unwrap()),
+        power: g(&m, "pw").map(|p| (p.parse().unwrap(), g(&m, "pwle").is_some())),
+        attr: g(&m, "attr").or_else(|| g(&m, "attr2")).map(String::from),
         excl: g(&m, "excl").map(String::from),
     })
 }
 
-const OWN_PART: &str = r#"(?P<base>Leader or Character cards|Leader or Characters|Characters or \[[^\]]+\]|Leader|Characters?|(?P<types>\{[^}]+\}(?: or \{[^}]+\})*) type Characters?|\[(?P<name>[^\]]+)\](?: cards?)?)(?: with a type including "(?P<inc>[^"]+)")?"#;
+// "[Megalo] or {Neptunian} type cards", "Event or {Punk Hazard} type cards": a bare name, category
+// or type, or a second kind of card; a trailing "other than [X]" covers both. Other qualifiers can't
+// be split safely ("yellow Character or Stage card with a cost of 2 or less"), so they stay unsupported.
+const EITHER_LEFT: &str = r"\[[^\]]+\]|(?:Character|Event|Stage)s?(?: cards?)?|\{[^}]+\} type cards?";
+const EITHER_SHARED: &str = r" with a cost of | power| attribute|^(?:red|green|blue|purple|black|yellow) ";
 
-/// Which of your cards a phrase allows: 'Leader or Characters', '[Nami] cards', ...
-fn own_candidates(who: &str) -> Res<Vec<OwnPart>> {
+fn either_filter(f: &str) -> Res<Filter> {
+    let m = rfull(&format!(r"(?P<left>{EITHER_LEFT}) or (?P<right>.+?)(?: other than \[(?P<excl>[^\]]+)\])?"), f)
+        .ok_or(Unsupported)?;
+    if re(EITHER_SHARED.to_string()).is_match(&m["right"]) {
+        return Err(Unsupported);
+    }
+    Ok(Filter::Either {
+        left: Box::new(parse_filter(&m["left"])?),
+        right: Box::new(parse_filter(&m["right"])?),
+        excl: g(&m, "excl").map(String::from),
+    })
+}
+
+const OWN_PART: &str = concat!(
+    r#"(?P<base>Leader or Character cards|Leader or Characters|Characters or \[[^\]]+\]|Leader|Characters?"#,
+    r#"|(?P<types>\{[^}]+\}(?: or \{[^}]+\})*) type (?P<tl>Leader or )?Characters?|\[(?P<name>[^\]]+)\](?: cards?)?)"#,
+    r#"(?: with a type including "(?P<inc>[^"]+)")?"#,
+    r"(?: with both the \{(?P<both>[^}]+)\} type and a \[Trigger\])?",
+    r"(?: with the <(?P<attr>[^>]+)>(?: or <(?P<attr2>[^>]+)>)? attribute)?",
+    r"(?:(?: and| with) (?P<pw>\d+) power or less)?",
+    r"(?: with a cost of (?P<cmin>\d+) or more)?"
+);
+
+/// Which of your cards a phrase allows: 'Leader or Characters', '[Nami] cards', ... With
+/// `chars_only` the phrase must name only Characters (costs paid with them).
+fn own_candidates(who: &str, chars_only: bool) -> Res<Vec<OwnPart>> {
     let mut parts = vec![];
     for text in re(r" or up to \d+ of your ".to_string()).split(who) {
         let m = rfull(OWN_PART, text).ok_or(Unsupported)?;
         let base = g(&m, "base").unwrap_or("");
         let types_s = g(&m, "types");
+        let tl = g(&m, "tl").is_some();
+        let names_chars = base.starts_with("Character") && !base.starts_with("Characters or");
+        if chars_only && !(names_chars || (types_s.is_some() && !tl)) {
+            return Err(Unsupported);
+        }
         let pool = if base == "Leader" {
             Pool::Leader
-        } else if (base.starts_with("Character") && !base.starts_with("Characters or")) || types_s.is_some() {
+        } else if (names_chars || types_s.is_some()) && !tl {
             Pool::Characters
         } else {
             Pool::LeaderAndCharacters
@@ -587,6 +687,10 @@ fn own_candidates(who: &str) -> Res<Vec<OwnPart>> {
             name: g(&m, "name").map(String::from),
             orname,
             inc: g(&m, "inc").map(String::from),
+            both: g(&m, "both").map(String::from),
+            attrs: [g(&m, "attr"), g(&m, "attr2")].into_iter().flatten().map(String::from).collect(),
+            power_max: g(&m, "pw").map(|p| p.parse().unwrap()),
+            cost_min: g(&m, "cmin").map(|c| c.parse().unwrap()),
         });
     }
     Ok(parts)
@@ -614,10 +718,26 @@ fn templates() -> Vec<(String, Build)> {
         (format!(r"Up to {OPP} cannot attack until the end of your opponent's next End Phase\."), |m| {
             t(Tpl::CannotAttack { n: gu(m, "n"), pred: opp_pred(m) })
         }),
+        (format!(r"Up to {OPP} will not become active in your opponent's next Refresh Phase\."), |m| {
+            t(Tpl::SkipRefresh { n: gu(m, "n"), pred: opp_pred(m) })
+        }),
+        (format!(r"Negate the effect of up to {OPP} during this turn(?P<ret>, and return it to the owner's hand)?\."), |m| {
+            t(Tpl::Negate { n: gu(m, "n"), pred: opp_pred(m), back: g(m, "ret").is_some() })
+        }),
+        (format!(r"K\.O\. or rest up to {OPP}\."), |m| t(Tpl::KoOrRest { n: gu(m, "n"), pred: opp_pred(m) })),
+        (
+            concat!(
+                r"Rest up to (?P<n>\d+) of your opponent's Characters with a cost equal to or less than the total of your ",
+                r"and your opponent's Life cards\."
+            )
+            .into(),
+            |m| t(Tpl::RestByLife { n: gu(m, "n") }),
+        ),
         (
             concat!(
                 r"Give up to (?P<n>\d+) of your opponent's (?P<rested>rested )?(?P<who>Leader or Character cards|",
-                r"Leader or Characters|Characters) -(?P<v>\d+) (?P<what>power|cost) during this turn\."
+                r"Leader or Characters|Characters)(?: with (?P<minpw>\d+) power or more)? -(?P<v>\d+) (?P<what>power|cost) ",
+                r"(?:during this turn|until the end of your opponent's (?P<next>next) End Phase)\."
             )
             .into(),
             |m| {
@@ -627,8 +747,41 @@ fn templates() -> Vec<(String, Build)> {
                     cost: &m["what"] == "cost",
                     with_leader: m["who"].starts_with("Leader"),
                     rested: g(m, "rested").is_some(),
+                    min_power: g(m, "minpw").map(|p| p.parse().unwrap()),
+                    until: if g(m, "next").is_some() { Until::NextEnd } else { Until::Turn },
                 })
             },
+        ),
+        (r"Give up to (?P<n>\d+) Characters? (?P<sign>[+-])(?P<v>\d+) power during this turn\.".into(), |m| {
+            let sign = if &m["sign"] == "+" { 1 } else { -1 };
+            t(Tpl::GiveAny { n: gu(m, "n"), v: sign * gi(m, "v"), label: format!("{}{} power", &m["sign"], &m["v"]) })
+        }),
+        (r"Give your opponent's Leader -(?P<v>\d+) power during this turn\.".into(), |m| {
+            t(Tpl::OppLeaderDebuff { v: gi(m, "v") })
+        }),
+        (r"K\.O\. up to (?P<n>\d+) of your (?P<who>.+?)\.".into(), |m| {
+            t(Tpl::KoOwn { n: gu(m, "n"), who: own_candidates(&m["who"], true)? })
+        }),
+        (
+            concat!(
+                r"All of your Characters with (?P<bp>\d+) base power or less gain \+(?P<v>\d+) power ",
+                r"(?:during this (?P<dur>battle|turn)|until the end of your opponent's next End Phase)\."
+            )
+            .into(),
+            |m| t(Tpl::BuffAll { bp: gi(m, "bp"), v: gi(m, "v"), until: until_from(g(m, "dur")) }),
+        ),
+        (
+            concat!(
+                r"All of your Characters with (?P<bp>\d+) base power and the \{(?P<t>[^}]+)\} type cannot be K\.O\.'d in ",
+                r"battle until the end of your opponent's next End Phase\."
+            )
+            .into(),
+            |m| t(Tpl::ProtectAll { bp: gi(m, "bp"), t: m["t"].to_string() }),
+        ),
+        (
+            r"All of your opponent's Characters with a cost of (?P<c>\d+) cannot activate \[Blocker\] during this turn\."
+                .into(),
+            |m| t(Tpl::NoBlockerAll { cost: gi(m, "c") }),
         ),
         (
             r"Give all of your opponent's Characters -(?P<v>\d+) (?P<what>power|cost) during this turn\.".into(),
@@ -679,7 +832,9 @@ fn templates() -> Vec<(String, Build)> {
         }),
         (r"Draw (?P<d>\d+) cards?(?:\.|,? and )".into(), |m| t(Tpl::Draw { d: gu(m, "d") })),
         (r"Trash (?P<t>\d+) cards? from your hand\.".into(), |m| t(Tpl::TrashHand { t: gu(m, "t") })),
-        (r"Your opponent trashes (?P<n>\d+) cards? from their hand\.".into(), |m| t(Tpl::OppTrashes { n: gu(m, "n") })),
+        (r"(?:Your opponent trashes|They trash) (?P<n>\d+) cards? from their hand\.".into(), |m| {
+            t(Tpl::OppTrashes { n: gu(m, "n") })
+        }),
         (r"Trash (?P<n>\d+) cards? from your opponent's hand\.".into(), |m| t(Tpl::TrashOppHand { n: gu(m, "n") })),
         (
             r"Your opponent places (?P<n>\d+) cards? from their hand at the bottom of their deck(?: in any order)?\.".into(),
@@ -722,34 +877,54 @@ fn templates() -> Vec<(String, Build)> {
                 })
             },
         ),
+        (r"Give up to (?P<n>\d+) rested DON!! cards? to 1 of your (?P<who>.+?)\.".into(), |m| {
+            t(Tpl::GiveRestedDonTo { n: gi(m, "n") as u32, who: own_candidates(&m["who"], false)? })
+        }),
         (format!(r"Set up to (?P<n>\d+) of your {who} as active\."), |m| {
-            t(Tpl::SetActive { n: gu(m, "n"), who: own_candidates(&m["who"])? })
+            t(Tpl::SetActive { n: gu(m, "n"), who: own_candidates(&m["who"], false)? })
         }),
         (format!(r"Up to (?P<n>\d+) of your {who} gains? \+(?P<v>\d+) power during this (?P<dur>battle|turn)\."), |m| {
             t(Tpl::Buff {
                 n: gu(m, "n"),
                 v: gi(m, "v"),
                 until: until_from(g(m, "dur")),
-                who: own_candidates(&m["who"])?,
+                who: own_candidates(&m["who"], false)?,
             })
         }),
         (format!(r"Up to (?P<n>\d+) of your {who} gains? \[(?P<kw>[^\]]+)\] during this turn\."), |m| {
             let kw = kw_of(m, "kw")?;
-            t(Tpl::Grant { n: gu(m, "n"), kw, who: own_candidates(&m["who"])? })
+            t(Tpl::Grant { n: gu(m, "n"), kw, who: own_candidates(&m["who"], false)? })
         }),
-        (r"Your Leader gains \+(?P<v>\d+) power during this (?P<dur>battle|turn)\.".into(), |m| {
-            t(Tpl::LeaderBuff { v: gi(m, "v"), until: until_from(g(m, "dur")) })
-        }),
+        (
+            concat!(
+                r"Your (?:(?P<types>\{[^}]+\}(?: or \{[^}]+\})*) type )?Leader gains \+(?P<v>\d+) power during this ",
+                r"(?P<dur>battle|turn)\."
+            )
+            .into(),
+            |m| {
+                t(Tpl::LeaderBuff {
+                    v: gi(m, "v"),
+                    until: until_from(g(m, "dur")),
+                    types: find_all(r"\{([^}]+)\}", g(m, "types").unwrap_or("")),
+                })
+            },
+        ),
         (r"Your (?:\[(?P<name>[^\]]+)\] )?Leader gains \[(?P<kw>[^\]]+)\] during this turn\.".into(), |m| {
             t(Tpl::LeaderKeyword { kw: kw_of(m, "kw")?, name: g(m, "name").map(String::from) })
         }),
         (
             concat!(
                 r"Your (?:(?P<who>\[[^\]]+\]|\{[^}]+\} type|monocolored) )?Leader's base power becomes (?P<v>\d+) ",
-                r"until the end of your opponent's next End Phase\."
+                r"(?:until the end of your opponent's next End Phase|during this (?P<dur>turn))\."
             )
             .into(),
-            |m| t(Tpl::LeaderBasePower { v: gi(m, "v"), who: g(m, "who").unwrap_or("").to_string() }),
+            |m| {
+                t(Tpl::LeaderBasePower {
+                    v: gi(m, "v"),
+                    who: g(m, "who").unwrap_or("").to_string(),
+                    until: if g(m, "dur").is_some() { Until::Turn } else { Until::NextEnd },
+                })
+            },
         ),
         (
             concat!(
@@ -781,8 +956,9 @@ fn templates() -> Vec<(String, Build)> {
         ),
         (
             concat!(
-                r"Look at (?P<n>\d+) cards? from the top of your deck; reveal up to (?P<k>\d+) (?P<f>.+?) and add (?:it|them) ",
-                r"to your hand\. Then, (?P<rest>place the rest at the bottom of your deck in any order|trash the rest)\."
+                r"Look at (?P<n>\d+) cards? from the top of your deck; reveal up to (?:a total of )?(?P<k>\d+) (?P<f>.+?) and ",
+                r"add (?:it|them) to your hand(?:\. Then,|, then) ",
+                r"(?P<rest>place the rest at the bottom of your deck in any order|trash the rest)\."
             )
             .into(),
             |m| {
@@ -819,8 +995,8 @@ fn templates() -> Vec<(String, Build)> {
             .into(),
             |m| t(Tpl::CharToLife { n: gu(m, "n"), opp_only: g(m, "opp").is_some(), cost: gi(m, "cost") }),
         ),
-        (r"Add up to (?P<n>\d+) (?P<f>[^.]+?) from your hand to the top of your Life cards face-up\.".into(), |m| {
-            t(Tpl::HandToLife { n: gu(m, "n"), pred: parse_filter(&m["f"])? })
+        (r"Add up to (?P<n>\d+) (?P<f>[^.]+?) from your hand to the top of your Life cards(?P<fu> face-up)?\.".into(), |m| {
+            t(Tpl::HandToLife { n: gu(m, "n"), pred: parse_filter(&m["f"])?, face_up: g(m, "fu").is_some() })
         }),
     ]
 }

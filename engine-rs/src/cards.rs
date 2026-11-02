@@ -3,7 +3,7 @@
 
 use smallvec::SmallVec;
 
-use crate::effects::{Body, Cond, Statics};
+use crate::effects::{Body, Cond, KoFilterFn, Statics};
 
 pub type Uid = u16;
 
@@ -54,6 +54,8 @@ pub enum Timing {
     EndOfBattle,
     AttackDeclared,
     DonReturned,
+    /// "when one of your Characters ... is K.O.'d" (Effect::ko_filter)
+    AllyKo,
 }
 
 impl Timing {
@@ -76,6 +78,7 @@ impl Timing {
             Self::EndOfBattle => "End of Battle",
             Self::AttackDeclared => "Attack Declared",
             Self::DonReturned => "DON!! Returned",
+            Self::AllyKo => "Ally K.O.",
         }
     }
     /// Printed timing tags (effect_text.TIMING_TAGS).
@@ -110,6 +113,7 @@ pub enum Kw {
     NoKoInBattle,
     NoKoByEffects,
     NoKoByOppEffects,
+    NoBlocker,
 }
 
 impl Kw {
@@ -137,6 +141,7 @@ impl Kw {
             Self::NoKoInBattle => "Cannot be K.O.'d in battle",
             Self::NoKoByEffects => "Cannot be K.O.'d by effects",
             Self::NoKoByOppEffects => "Cannot be K.O.'d by your opponent's effects",
+            Self::NoBlocker => "Cannot activate [Blocker]",
         }
     }
     pub const PRINTED: [Kw; 6] = [Kw::Banish, Kw::Blocker, Kw::DoubleAttack, Kw::Rush, Kw::RushCharacter, Kw::Unblockable];
@@ -159,6 +164,8 @@ pub struct Effect {
     /// Effects printed as one ("[When Attacking]/[On Your Opponent's Attack]") share
     /// [Once Per Turn]; they all carry the index of the first of them.
     pub opt_group: Option<usize>,
+    /// AllyKo only: (source, K.O.'d card) -> sets the effect off. Read while the card is on the field.
+    pub ko_filter: Option<KoFilterFn>,
 }
 
 impl Effect {
@@ -177,6 +184,7 @@ impl Effect {
             condition: None,
             optional: false,
             opt_group: None,
+            ko_filter: None,
         }
     }
 }
@@ -192,6 +200,7 @@ pub struct CardDef {
     pub counter: i32,
     pub life: i32,
     pub types: Vec<String>,
+    pub attributes: Vec<String>,
     pub keywords: Vec<Kw>,
     pub effects: Vec<Effect>,
     /// Permanent effects and replacement effects (compiled or scripted).

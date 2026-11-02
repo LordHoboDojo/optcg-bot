@@ -5,11 +5,12 @@ import random
 import optcg_rs
 from optcg import Game
 from optcg.agents import GreedyAgent
-from optcg.cards import (CANNOT_ATTACK, KEYWORDS, NO_KO_BY_EFFECTS, NO_KO_BY_OPP_EFFECTS, NO_KO_IN_BATTLE)
+from optcg.cards import (CANNOT_ATTACK, KEYWORDS, NO_BLOCKER, NO_KO_BY_EFFECTS, NO_KO_BY_OPP_EFFECTS,
+                         NO_KO_IN_BATTLE, Category)
 from optcg.carddb import coverage, official_decks
 from optcg.env import encode
 
-ALL_KW = sorted(KEYWORDS | {CANNOT_ATTACK, NO_KO_IN_BATTLE, NO_KO_BY_EFFECTS, NO_KO_BY_OPP_EFFECTS})
+ALL_KW = sorted(KEYWORDS | {CANNOT_ATTACK, NO_KO_IN_BATTLE, NO_KO_BY_EFFECTS, NO_KO_BY_OPP_EFFECTS, NO_BLOCKER})
 _db = None
 
 
@@ -24,6 +25,39 @@ def rust_db():
 def covered():
     ds = official_decks()
     return {n: d for n, d in ds.items() if coverage(d)[0] == coverage(d)[1]}
+
+
+def set_decks(prefix: str) -> dict:
+    """Test decks that play a set's cards, which no official deck may use: for each colour, 4 of
+    every card of the set in that colour, filled to 50 with fully implemented cards of the colour,
+    under a fully implemented Leader of that colour; plus one deck for each of the set's Leaders."""
+    from optcg.carddb import load_cards
+    from optcg.deck import Deck
+    cards = load_cards()
+    ok = sorted((d for d in cards.values() if not d.unimplemented), key=lambda d: d.id)
+    out = {}
+
+    def build(leader, colors):
+        own = [d for d in sorted(cards.values(), key=lambda d: d.id)
+               if d.id.startswith(prefix) and d.category != Category.LEADER and set(d.colors) & set(colors)]
+        picks = [d for d in own for _ in range(4)][:50]
+        for d in ok:
+            if len(picks) >= 50:
+                break
+            if d.category != Category.LEADER and set(d.colors) & set(colors) and picks.count(d) < 4 \
+                    and not d.id.startswith(prefix):
+                picks += [d] * min(4, 50 - len(picks))
+        deck = Deck(leader, picks)
+        deck.validate()
+        return deck
+
+    for color in ("red", "green", "blue", "purple", "black", "yellow"):
+        leader = next(d for d in ok if d.category == Category.LEADER and d.colors == (color,))
+        out[f"{prefix} {color}"] = build(leader, (color,))
+    for d in sorted(cards.values(), key=lambda d: d.id):
+        if d.id.startswith(prefix) and d.category == Category.LEADER:
+            out[f"{prefix} {d.name}"] = build(d, d.colors)
+    return out
 
 
 def field_card(g, c):

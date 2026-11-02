@@ -32,8 +32,8 @@ def card_from_json(j: dict) -> CardDef:
         added = tuple(extra.pop("effects", ()))
         if s.covers is None:
             fields["effects"], fields["unimplemented"] = added, ()
-        else:
-            fields["effects"] += added
+        else:  # the script replaces the lines it covers, compiled or not
+            fields["effects"] = tuple(e for e in fields["effects"] if not any(c in e.text for c in s.covers)) + added
             fields["unimplemented"] = tuple(u for u in fields["unimplemented"]
                                             if not any(c in u for c in s.covers))
         fields.update(extra)

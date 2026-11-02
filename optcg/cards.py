@@ -34,7 +34,8 @@ class Timing(str, Enum):
     END_OF_BATTLE = "End of Battle"        # 7-1-5-2: "at the end of the/this battle"
     # Engine events with no printed keyword (fired for every card on the field):
     ATTACK_DECLARED = "Attack Declared"   # after [When Attacking] / [On Your Opponent's Attack]
-    DON_RETURNED = "DON!! Returned"       # after a DON!! -X cost returned DON!! to the DON!! deck
+    DON_RETURNED = "DON!! Returned"       # after DON!! on the field went back to the DON!! deck
+    ALLY_KO = "Ally K.O."                 # "when one of your Characters ... is K.O.'d" (Effect.ko_filter)
 
 
 # Keyword effects (10-1). [Trigger] is modelled as an Effect instead.
@@ -50,6 +51,7 @@ CANNOT_ATTACK = "Cannot Attack"
 NO_KO_IN_BATTLE = "Cannot be K.O.'d in battle"
 NO_KO_BY_EFFECTS = "Cannot be K.O.'d by effects"
 NO_KO_BY_OPP_EFFECTS = "Cannot be K.O.'d by your opponent's effects"
+NO_BLOCKER = "Cannot activate [Blocker]"
 
 COLORS = frozenset({"red", "green", "blue", "purple", "black", "yellow"})
 
@@ -75,6 +77,9 @@ class Effect:
     optional: bool = False      # "you may": the owner is asked before activating
     # Effects printed as one ("[When Attacking]/[On Your Opponent's Attack]") share [Once Per Turn].
     opt_group: Optional[str] = None
+    # ALLY_KO only: (game, source, K.O.'d card) -> True if this K.O. sets the effect off. Read while
+    # the card is still on the field.
+    ko_filter: Optional[Callable] = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +94,7 @@ class Replacement:
     pay: Callable
     payable: Callable = lambda g, src: True
     text: str = ""
+    once_per_turn: bool = False
 
 
 @dataclass(frozen=True, eq=False)
@@ -122,6 +128,8 @@ class CardDef:
     # While on the field: (game, source) -> True if the opponent may only attack cards with this name.
     attack_lock: Optional[Callable] = None
     replacements: tuple[Replacement, ...] = ()
+    # "If you would take damage, ... instead": applies(g, src, player), pay(g, src), payable(g, src).
+    damage_replacements: tuple[Replacement, ...] = ()
     text: str = ""
     trigger_text: str = ""
     # Effect lines from the printed text that the engine does not carry out yet.

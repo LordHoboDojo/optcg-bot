@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from typing import Iterable, Optional
 
 from .actions import Action, Decision
-from .cards import (BANISH, BLOCKER, CANNOT_ATTACK, DOUBLE_ATTACK, NO_KO_BY_EFFECTS, NO_KO_BY_OPP_EFFECTS,
-                    NO_KO_IN_BATTLE, RUSH, RUSH_CHARACTER, UNBLOCKABLE,
+from .cards import (BANISH, BLOCKER, CANNOT_ATTACK, DOUBLE_ATTACK, NO_BLOCKER, NO_KO_BY_EFFECTS,
+                    NO_KO_BY_OPP_EFFECTS, NO_KO_IN_BATTLE, RUSH, RUSH_CHARACTER, UNBLOCKABLE,
                     Card, CardDef, Category, Mod, Timing)
 from .deck import Deck
 
@@ -388,12 +388,31 @@ class Game:
         for src in list(self.players[card.owner].field):
             if self.negated(src):
                 continue
-            for r in src.d.replacements:
+            for j, r in enumerate(src.d.replacements):
+                key = f"replacement {j}"
+                if r.once_per_turn and src.opt_used.get(key) == self.turn_number:
+                    continue
                 if not (r.applies(self, src, card, by, ko) and r.payable(self, src)):
                     continue
                 if (yield from self.confirm(card.owner, f"{src.name}: {r.text} instead?")):
+                    if r.once_per_turn:
+                        src.opt_used[key] = self.turn_number
                     self._log(f"{src.name} replaces the removal of {card.name}")
                     yield from r.pay(self, src, card)
+                    return True
+        return False
+
+    def _damage_replaced(self, player: int):
+        """Offer `player`'s "if you would take damage ... instead" effects for 1 point of damage."""
+        for src in list(self.players[player].field):
+            if self.negated(src):
+                continue
+            for r in src.d.damage_replacements:
+                if not (r.applies(self, src, player) and r.payable(self, src)):
+                    continue
+                if (yield from self.confirm(player, f"{src.name}: {r.text} instead of taking damage?")):
+                    self._log(f"{src.name} replaces 1 damage")
+                    yield from r.pay(self, src)
                     return True
         return False
 
@@ -476,6 +495,10 @@ class Game:
         if replaceable and (yield from self._replaced(card, by, ko=True)):
             return
         ready = [i for i in card.d.effect_indexes(Timing.ON_KO) if self.can_activate(card, i)]
+        # "when one of your Characters ... is K.O.'d": judged while the card is still on the field
+        watchers = [(src, i) for src in self.players[card.owner].field if src is not card
+                    for i in src.d.effect_indexes(Timing.ALLY_KO)
+                    if self.can_activate(src, i) and src.d.effects[i].ko_filter(self, src, card)]
         self._log(f"{card.name} is K.O.'d")
         paid = []
         for i in ready:  # activate while the card is still on the field
@@ -487,6 +510,8 @@ class Game:
         self.move(card, "trash")
         for i in paid:  # resolved from the trash, in turn order with other triggered effects
             self._queue.append(_Pending(card, i, card.incarnation, self._next_batch(), activated=True))
+        for src, i in watchers:
+            self._queue.append(_Pending(src, i, src.incarnation, self._next_batch()))
 
     def play_card(self, card: Card, rested: bool = False):
         """Play a Character or Stage without paying its cost (e.g. from an effect)."""
@@ -500,7 +525,9 @@ class Game:
     def deal_damage(self, player: int, amount: int = 1, banish: bool = False):
         """Damage processing (4-6, 7-1-4-1-1)."""
         ps = self.players[player]
-        for _ in range(amount):
+        for _ in range(amount):  # one point at a time (4-6-2-2)
+            if (yield from self._damage_replaced(player)):
+                continue
             if not ps.life:
                 self._log(f"Player {player} takes damage with 0 Life")
                 raise GameOver(1 - player)
@@ -904,7 +931,8 @@ class Game:
         self.phase = "block"
         if not self.has_keyword(attacker, UNBLOCKABLE):
             blockers = [c for c in opp.characters
-                        if c is not b.target and not c.rested and self.has_keyword(c, BLOCKER)]
+                        if c is not b.target and not c.rested and self.has_keyword(c, BLOCKER)
+                        and not self.has_keyword(c, NO_BLOCKER)]
             if blockers:
                 opts = [Action("pass", label="Don't block")] + [
                     Action("block", card=c.uid, label=f"Block with {self.describe(c)}") for c in blockers]
