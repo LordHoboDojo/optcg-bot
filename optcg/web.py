@@ -98,8 +98,9 @@ class Session:
             f = self._frame()
             base = {"pl": d.player, "kind": d.kind, "q": d.prompt}
             if d.player == self.human:
+                cid = lambda u: None if u is None else g.cards[u].d.id  # the decider sees its option cards
                 f["d"] = {**base, "o": [str(o) for o in d.options], "pick": None, "hl": [],
-                          "act": [[o.kind, o.card, o.target] for o in d.options]}
+                          "act": [[o.kind, o.card, o.target, o.index, cid(o.card), cid(o.target)] for o in d.options]}
                 self.frames.append(f)
                 return
             a = self.bot.act(g, d)

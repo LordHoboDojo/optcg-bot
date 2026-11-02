@@ -13,10 +13,10 @@ python3 -m unittest discover tests                           # rule tests (.venv
 
 ## Watching a game
 
-`optcg.replay` records a game and writes it as one HTML file you open in a browser: a slideshow
-with one step per decision, showing both boards and hands, what happened since the last step,
-the options and the one chosen. Hover a card to zoom in, click it to keep it in the side panel;
-arrow keys step, space plays.
+`optcg.replay` records a game and writes it as one HTML file you open in a browser. It plays
+back on the same table as live games (see below), one step per decision, with both hands face
+up and the option each player chose highlighted. Space plays, the arrow keys step, and the
+timeline on the right jumps anywhere; click a trash pile to see everything in it.
 
 Card art comes from `StreamingAssets/Cards/<set>/<id>.png|jpg`. The page links to it by relative
 path instead of embedding it, so a replay shows art only while it sits where it can reach that
@@ -39,11 +39,19 @@ you in one seat and a bot in the other:
 .venv/bin/python -m optcg.web --deck0 "(Black) Monkey.D.Luffy" --deck1 "(Blue) Rocks.D.Xebec" --bot runs/league/latest.pt --open
 ```
 
-On your decisions the cards you can use glow green. Click a hand card to play it or use it as a Counter, a Character
-to block with it, or an attacker and then its target (it pulses red). Click the
-DON!! pile and then a card to give it DON!!. Every option is also a button in the side panel,
-and number keys pick them. After each of your moves the bot's turn plays back step by step;
-press End to skip to the present. You can step back through the whole game at any time.
+The table follows the official playmat (zones cut from the leader's playmat in
+`StreamingAssets/Playmats`), with the opponent across from you. The cards you can use glow green:
+
+- **Play a card:** drag it from your hand onto the field, or click it.
+- **Attack:** drag an attacker onto a target (valid ones pulse red), or click it and choose Attack.
+- **Give DON!!:** drag an active DON!! from your cost area onto a card, or click the card.
+- **Block and Counter:** Blockers glow when you're attacked; Counter cards in hand show their
+  +value; the side panel says how much you need.
+- **Mulligan, Trigger reveals, deck searches and ordering** open in the middle of the table.
+
+Hover any card for a large preview and its text on the left. After each of your moves the bot's
+turn plays back with its moves narrated; "Skip to my move" or End jumps ahead, and the timeline
+steps back through the whole game.
 
 You only see what your seat may see: the bot's hand is face down, and of each bot decision
 only the option it picked. `--human 1` takes the other seat, `--seed` fixes the shuffle, and
@@ -92,7 +100,7 @@ used at all.
 | `optcg/human.py` | Terminal play against a bot |
 | `optcg/env.py` | Training environment and observation encoding |
 | `optcg/nn/` | PyTorch policy network, imitation and PPO training (needs PyTorch) |
-| `optcg/replay.py` | Records a game as an HTML slideshow (`replay_viewer.html` is the page) |
+| `optcg/replay.py` | Records a game as an HTML page; `replay_viewer.html` is the table, for replays and live play |
 | `optcg/web.py` | Local server for playing a bot in the browser, on the replay page |
 | `engine-rs/` | The same engine in Rust, as the Python module `optcg_rs` (see its README) |
 | `tools/bench.py` | Games per second, with and without encoding |

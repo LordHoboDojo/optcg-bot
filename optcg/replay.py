@@ -40,14 +40,29 @@ def _art_index(assets: Path) -> dict[str, str]:
     return out
 
 
+COLOR_ORDER = ("red", "green", "blue", "purple", "black", "yellow")
+
+
+def _playmat(assets: Path, colors) -> Optional[str]:
+    """The official playmat for a Leader's colours (Playmats/BlueYellow.png, ...), if there is one."""
+    cols = sorted(colors, key=lambda c: COLOR_ORDER.index(c) if c in COLOR_ORDER else 99)
+    for name in ("".join(c.title() for c in cols), "".join(c.title() for c in reversed(cols))):
+        if (assets / "Playmats" / f"{name}.png").exists():
+            return f"Playmats/{name}.png"
+    return None
+
+
 def art(replay: dict, assets: Path = ASSETS) -> dict:
-    """Image paths for a replay's cards and card backs, relative to `assets`."""
+    """Image paths for a replay's cards, card backs, playmats and table, relative to `assets`."""
     if not (assets / "Cards").is_dir():
         return {}
     index = _art_index(assets)
+    leaders = [pl.get("id") for pl in replay["players"]]
     return {"cards": {i: index[i] for i in replay["cards"] if i in index},
             "back": "CardBacks/CardBackRegular.png", "don": "Cards/Don/Don.png",
-            "donBack": "CardBacks/CardBackDon.png"}
+            "donBack": "CardBacks/CardBackDon.png",
+            "mats": [_playmat(assets, replay["cards"][i]["col"]) if i in replay["cards"] else None for i in leaders],
+            "table": "background.jpg" if (assets / "background.jpg").exists() else None}
 
 
 def _card(g: Game, c: Card) -> dict:

@@ -3,441 +3,861 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OPTCG Replay</title>
+<title>OPTCG Table</title>
 <style>
 :root {
-  --bg: #0d1016; --panel: #151a22; --panel2: #1d232e; --line: #2a3140; --text: #e9ecf2; --dim: #8a93a5; --faint: #5a6375;
-  --p0: #5cc8ff; --p1: #ffb547; --gold: #f2c94c; --bad: #ff5a5f; --good: #4cd17a; --pick: #b98cff;
-  --red: #d64545; --green: #2e9e5b; --blue: #3b6fd8; --purple: #8a4fd1; --black: #555b66; --yellow: #e0b400;
-  --cw: clamp(60px, min((100vw - 560px) / 9.2, (100vh - 290px) / 5), 128px);  /* field card width */
-  --ch: calc(var(--cw) * 1.397);              /* 63 x 88 mm */
-  --hw: calc(var(--cw) * .74);                /* hand card */
-  --pw: calc(var(--cw) * .62);                /* pile card */
+  --ink: #f3f0e8; --dim: #b9b4a6; --faint: #7d786c;
+  --panel: rgba(16, 19, 26, .88); --panel2: rgba(30, 35, 46, .95); --line: rgba(255, 255, 255, .12);
+  --gold: #f4c542; --red: #ff4d4d; --green: #46e08a; --blue: #5cc8ff; --violet: #b98cff;
+  --W: 92px; --H: 128px;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { margin: 0; height: 100%; }
-body { background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
-  display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr) 340px;
-  grid-template-areas: "top top" "board side" "ctl ctl"; }
-.p0 { color: var(--p0); } .p1 { color: var(--p1); }
-b { font-weight: 650; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #120d09; color: var(--ink);
+  font: 14px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; user-select: none; -webkit-user-select: none; }
+#backdrop { position: fixed; inset: 0; background: radial-gradient(ellipse at 50% 45%, rgba(0,0,0,.08), rgba(0,0,0,.75) 78%), var(--table, #2a1b10) center / cover; }
+#stage { position: absolute; left: 0; top: 0; width: 1600px; height: 1000px; transform-origin: 0 0; }
+.title { font-family: Impact, "Arial Narrow Bold", "Helvetica Neue", sans-serif; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 
-/* header */
-header { grid-area: top; display: flex; align-items: center; gap: 14px; padding: 9px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
-header h1 { font-size: 15px; margin: 0; font-weight: 650; }
-header .vs { color: var(--faint); font-weight: 400; margin: 0 4px; }
-header .meta { color: var(--dim); font-size: 13px; }
-header .result { margin-left: auto; font-weight: 650; padding: 3px 12px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); }
+/* ------------------------------------------------ zones (cut from the official playmat) */
+.zone { position: absolute; border-radius: 8px; overflow: hidden; background-color: rgba(20, 30, 50, .55); background-repeat: no-repeat;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.18), 0 2px 10px rgba(0,0,0,.45); transition: box-shadow .2s; }
+.zone::after { content: ""; position: absolute; inset: 0; background: rgba(8,10,16,.5); }
+.zone { filter: saturate(.75); }
+.zone.top { transform: rotate(180deg); }
+.zone .lbl { position: absolute; inset: 0; display: grid; place-items: center; color: rgba(255,255,255,.75); font-size: 15px; z-index: 1; }
+.zone.drop { box-shadow: inset 0 0 0 3px var(--green), 0 0 26px rgba(70,224,138,.55); }
+.mid-line { position: absolute; left: 330px; width: 940px; top: 469px; height: 2px; background: linear-gradient(90deg, transparent, rgba(244,197,66,.55), transparent); }
 
-/* board */
-#board { grid-area: board; overflow: auto; padding: 10px 14px; display: flex; flex-direction: column; justify-content: center; gap: 6px; min-width: 0; }
-.side { position: relative; border-radius: 14px; border: 1px solid var(--line); padding: 8px 12px; display: flex; flex-direction: column; gap: 6px;
-  overflow: hidden; isolation: isolate; background: #10141b; transition: border-color .2s, box-shadow .2s; }
-.side::before { content: ""; position: absolute; inset: 0; z-index: -1; opacity: .16;
-  background: radial-gradient(120% 140% at 0% 100%, var(--c1) 0%, transparent 60%), radial-gradient(120% 140% at 100% 0%, var(--c2) 0%, transparent 60%); }
-.side.top::before { transform: rotate(180deg); }
-.side.s0 { --accent: var(--p0); } .side.s1 { --accent: var(--p1); }
-.side.turn { border-color: color-mix(in srgb, var(--accent) 70%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 28px -6px color-mix(in srgb, var(--accent) 45%, transparent); }
+/* ------------------------------------------------ cards */
+#cards { position: absolute; inset: 0; }
+.card { position: absolute; left: 0; top: 0; width: var(--W); height: var(--H);
+  transition: transform .42s cubic-bezier(.2,.8,.2,1), opacity .35s; will-change: transform; }
+.card .lift { position: absolute; inset: 0; transition: transform .18s ease-out; }
+.card .face { position: absolute; inset: 0; border-radius: 6px; overflow: hidden; background: #f2eee4; color: #1b1b1b;
+  box-shadow: 0 3px 8px rgba(0,0,0,.6); transition: transform .35s ease, filter .3s, box-shadow .2s; }
+.card .face img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.card .face .tx { position: absolute; inset: 0; padding: 6px; font-size: 11px; font-weight: 700; line-height: 1.15; display: flex; flex-direction: column; gap: 3px;
+  border-top: 7px solid var(--stripe, #888); }
+.card .face .tx small { font-weight: 400; color: #555; }
+.card.rested .face { transform: rotate(90deg); filter: brightness(.78); }
+.card.flip .face { transform: rotate(180deg); }
+.card.don.rested .face { transform: rotate(90deg); filter: brightness(.55) saturate(.6); }
+.card .badges { position: absolute; inset: 0; pointer-events: none; }
+.pw { position: absolute; left: 50%; bottom: -9px; transform: translateX(-50%); padding: 1px 8px; border-radius: 999px; font-weight: 800; font-size: 14px;
+  background: rgba(10,12,18,.92); border: 1px solid rgba(255,255,255,.25); color: #fff; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pw.up { color: var(--green); border-color: rgba(70,224,138,.6); } .pw.down { color: var(--red); border-color: rgba(255,77,77,.6); }
+.cst { position: absolute; left: -7px; top: -7px; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 900; font-size: 13px;
+  border: 2px solid #fff; box-shadow: 0 1px 4px #000; }
+.cst.up { background: #2a8a46; } .cst.down { background: #b83232; }
+.dn { position: absolute; right: -8px; top: -8px; padding: 0 6px; height: 22px; border-radius: 11px; display: grid; place-items: center; font-weight: 900; font-size: 12px;
+  background: var(--gold); color: #3a2a00; box-shadow: 0 1px 4px #000; }
+.tuck { position: absolute; width: 34%; height: 30%; right: -14%; border-radius: 3px; overflow: hidden; z-index: -1; box-shadow: 0 1px 3px #000; background: #c9a227; }
+.tuck img { width: 100%; height: 100%; object-fit: cover; transform: rotate(90deg) scale(1.4); }
+.kws { position: absolute; left: 2px; right: 2px; bottom: 12px; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; }
+.kws span { font-size: 9px; font-weight: 800; padding: 0 4px; border-radius: 3px; background: rgba(0,0,0,.75); color: #fff; border: 1px solid rgba(255,255,255,.3); }
+.kws span.neg { background: rgba(160,30,30,.85); }
+.cnt { position: absolute; right: -6px; bottom: -6px; min-width: 26px; height: 26px; padding: 0 6px; border-radius: 13px; display: grid; place-items: center;
+  font-weight: 900; font-size: 13px; background: rgba(10,12,18,.95); border: 1px solid rgba(255,255,255,.3); }
+.ctr { position: absolute; left: 50%; top: -12px; transform: translateX(-50%); padding: 0 7px; border-radius: 999px; font-weight: 900; font-size: 13px;
+  background: var(--gold); color: #3a2a00; box-shadow: 0 0 10px rgba(244,197,66,.8); white-space: nowrap; }
 
-.handrow { display: flex; align-items: flex-end; gap: 12px; min-height: calc(var(--hw) * 1.397); }
-.top .handrow { align-items: flex-start; }
-.tag { flex: none; width: calc(var(--pw) * 2 + 18px); display: flex; flex-direction: column; gap: 2px; align-self: center; }
-.tag .who { color: var(--accent); font-weight: 700; font-size: 14px; line-height: 1.2; }
-.tag .agent { color: var(--dim); font-size: 12px; }
-.tag .turnflag { display: inline-block; margin-top: 3px; font-size: 11px; font-weight: 700; color: #0d1016; background: var(--accent); border-radius: 4px; padding: 0 6px; width: fit-content; white-space: nowrap; }
-.hand { display: flex; align-items: flex-end; min-width: 0; flex: 1; }
-.top .hand { align-items: flex-start; }
-.hand > .slot + .slot { margin-left: calc(var(--hw) * var(--overlap, -.08)); }
-.hand > .slot:hover { z-index: 2; }
-.hand .count { color: var(--dim); font-size: 12px; margin-left: 10px; align-self: center; white-space: nowrap; }
+.card.hand { cursor: grab; }
+.card.hand:hover { z-index: 400 !important; }
+.card.hand:hover .lift { transform: translateY(-58px) scale(1.32); }
+.card.field:hover .lift { transform: scale(1.06); }
+.card.dragging { transition: none; z-index: 900 !important; pointer-events: none; }
+.card.dragging .lift { transform: scale(1.1) rotate(-3deg); }
 
-.mat { display: flex; align-items: center; gap: 12px; }
-.zone { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; }
-.zone .lbl { color: var(--dim); font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; white-space: nowrap; }
-.zone .lbl b { color: var(--text); font-size: 12px; }
-.divider { width: 1px; align-self: stretch; background: linear-gradient(transparent, var(--line), transparent); flex: none; }
-.chars { display: flex; gap: 8px; flex: 1; min-width: 0; align-items: center; }
-.ghost { width: var(--cw); height: var(--ch); border: 1.5px dashed #ffffff1c; border-radius: 7px; flex: none; margin-bottom: 26px; }
-.zone .ghost { margin-bottom: 0; }
-.stage .ghost { width: var(--pw); height: calc(var(--pw) * 1.397); }
+.card.can .face { box-shadow: 0 0 0 3px var(--green), 0 0 18px rgba(70,224,138,.85); }
+.card.aim .face { box-shadow: 0 0 0 3px var(--red), 0 0 20px rgba(255,77,77,.9); animation: aim 1s ease-in-out infinite alternate; }
+.card.sel .face { box-shadow: 0 0 0 3px var(--gold), 0 0 22px rgba(244,197,66,.95); }
+.card.attacker .face { box-shadow: 0 0 0 3px var(--red), 0 0 26px rgba(255,77,77,.95); }
+.card.target .face { box-shadow: 0 0 0 3px #fff, 0 0 22px rgba(255,255,255,.85); }
+.card.picked .face { box-shadow: 0 0 0 3px var(--violet), 0 0 20px rgba(185,140,255,.9); }
+.card.can, .card.aim, .card.sel { cursor: pointer; }
+@keyframes aim { to { box-shadow: 0 0 0 3px var(--red), 0 0 6px rgba(255,77,77,.5); } }
 
-/* piles: life, deck, trash, DON */
-.piles { display: grid; grid-template-columns: repeat(2, auto); gap: 6px 10px; flex: none; }
-.pile { position: relative; width: var(--pw); height: calc(var(--pw) * 1.397); border-radius: 5px; }
-.pile img, .pile .face { width: 100%; height: 100%; border-radius: 5px; object-fit: cover; display: block; box-shadow: 0 2px 6px #0009; }
-.pile.empty { border: 1.5px dashed #ffffff14; }
-.pile.empty img { display: none; }
-.pile .num { position: absolute; right: -5px; bottom: -5px; min-width: 22px; height: 22px; padding: 0 5px; border-radius: 11px; background: #0d1016; border: 1px solid var(--line);
-  font-weight: 750; font-size: 12px; display: grid; place-items: center; }
-.pile.click { cursor: pointer; }
-.pile.don.rested img { transform: rotate(90deg) scale(.8); filter: brightness(.6) saturate(.6); }
-.lifestack { position: relative; width: var(--pw); }
-.lifestack .lc { position: absolute; left: 0; width: var(--pw); height: calc(var(--pw) * 1.397); border-radius: 5px; overflow: hidden; box-shadow: 0 2px 5px #000a; }
-.lifestack .lc img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.lifestack .lc.up { outline: 2px solid var(--gold); cursor: pointer; }
+#arrows { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
 
-/* cards */
-.slot { display: flex; flex-direction: column; align-items: center; flex: none; position: relative; }
-.cbox { width: var(--cw); height: var(--ch); display: grid; place-items: center; transition: width .25s; }
-.slot.rested .cbox { width: calc(var(--ch) * .8); }
-.card { width: var(--cw); height: var(--ch); border-radius: 7px; position: relative; overflow: hidden; cursor: zoom-in;
-  background: #f4f1e8; color: #1d1d1f; box-shadow: 0 3px 10px #000b; transition: transform .25s, box-shadow .2s, filter .25s; }
-.card > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.slot.rested .card { transform: rotate(90deg) scale(.8); filter: brightness(.72) saturate(.7); }
-.slot.hand-card .cbox, .slot.hand-card .card { width: var(--hw); height: calc(var(--hw) * 1.397); }
-.slot.hand-card .card { border-radius: 5px; }
-.card.back { cursor: default; }
+/* ------------------------------------------------ panels */
+.panel { position: absolute; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.45); backdrop-filter: blur(6px); }
+#preview { left: 14px; top: 14px; width: 300px; bottom: 14px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+#preview .big { width: 276px; height: 385px; border-radius: 12px; overflow: hidden; background: rgba(255,255,255,.04); display: grid; place-items: center; color: var(--faint);
+  box-shadow: 0 8px 24px rgba(0,0,0,.6); flex: none; }
+#preview .big img { width: 100%; height: 100%; object-fit: cover; }
+#preview .info { overflow: auto; font-size: 13px; color: var(--dim); flex: 1; min-height: 0; }
+#preview .info h3 { margin: 0 0 2px; color: var(--ink); font-size: 17px; }
+#preview .info .meta { font-size: 12px; color: var(--faint); margin-bottom: 6px; }
+#preview .info p { margin: 0 0 6px; white-space: pre-wrap; color: var(--ink); }
+#preview .info .un { color: #ff8a8a; font-size: 12px; }
 
-/* text card, shown when there is no art */
-.tc { position: absolute; inset: 0; display: flex; flex-direction: column; font-size: 10.5px; }
-.tc .stripe { height: 6px; flex: none; }
-.tc .tcost { margin: 4px 0 0 4px; width: 18px; height: 18px; border-radius: 50%; background: #222; color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 11px; }
-.tc .tname { padding: 3px 5px 0; font-weight: 700; line-height: 1.15; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.tc .tcat { margin-top: auto; padding: 0 5px 4px; color: #666; font-size: 9.5px; }
+#side { right: 14px; top: 14px; width: 282px; bottom: 14px; display: flex; flex-direction: column; overflow: hidden; }
+#side .top { padding: 10px 12px 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+#side .top .ttl { font-size: 12px; color: var(--faint); flex: 1; min-width: 100px; }
+.btn { border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.07); color: var(--ink); border-radius: 9px; padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+.btn:hover { background: rgba(255,255,255,.14); }
+.btn.primary { background: linear-gradient(180deg, #f6d36a, #d79b17); color: #2a1d00; border-color: #f6d36a; font-weight: 800; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { border-color: rgba(255,77,77,.5); color: #ffb3b3; }
+.btn:disabled { opacity: .45; cursor: default; }
+.who-row { margin: 0 10px 6px; padding: 7px 10px; border-radius: 10px; background: rgba(255,255,255,.04); border: 1px solid transparent; font-size: 12px; color: var(--dim); }
+.who-row .nm { font-weight: 800; font-size: 14px; display: block; margin-bottom: 2px; }
+.who-row b { color: var(--ink); }
+.who-row.turn { border-color: rgba(244,197,66,.7); box-shadow: 0 0 12px rgba(244,197,66,.3); }
+#prompt { margin-top: 4px; padding: 12px 14px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+#prompt .who { font-size: 12px; letter-spacing: .08em; }
+#prompt .who.me { color: var(--green); } #prompt .who.them { color: var(--blue); }
+#prompt .q { font-size: 15px; font-weight: 600; }
+#prompt .hint { font-size: 12px; color: var(--faint); }
+#prompt .opts { display: flex; flex-direction: column; gap: 6px; }
+#prompt .opts .btn { text-align: left; }
+#prompt .more { font-size: 12px; color: var(--faint); cursor: pointer; text-decoration: underline dotted; }
+#endturn { padding: 12px; font-size: 20px; border-radius: 12px; }
+#log { flex: 1; overflow: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--dim); }
+#log .t { color: var(--gold); font-weight: 700; margin-top: 6px; font-size: 12px; letter-spacing: .05em; }
+#log .l.me { border-left: 2px solid var(--green); padding-left: 6px; } #log .l.them { border-left: 2px solid var(--blue); padding-left: 6px; }
+#log .l.new { color: var(--ink); }
+#hist { padding: 8px 12px; border-top: 1px solid var(--line); display: flex; gap: 6px; align-items: center; }
+#hist input { flex: 1; min-width: 0; accent-color: var(--gold); }
 
-/* overlays on a card */
-.badge-cost { position: absolute; top: 3%; left: 4%; width: 26%; aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center;
-  font-weight: 800; font-size: calc(var(--cw) * .15); color: #fff; border: 2px solid #fff; box-shadow: 0 1px 4px #000a; z-index: 1; }
-.badge-cost.up { background: #2a8a46; } .badge-cost.down { background: #b83232; }
-.kws { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px; display: flex; flex-wrap: wrap; gap: 2px; justify-content: center;
-  background: linear-gradient(transparent, #000c 40%); z-index: 1; }
-.kws span { font-size: 9px; font-weight: 700; color: #fff; background: #ffffff26; border: 1px solid #ffffff40; padding: 0 4px; border-radius: 3px; line-height: 1.45; }
-.kws span.neg { background: #b8323299; border-color: #ff8a8a66; }
-.cap { height: 22px; margin-top: 4px; display: flex; gap: 4px; align-items: center; justify-content: center; }
-.pow { font-weight: 800; font-size: 13px; padding: 1px 8px; border-radius: 6px; background: #0d1016e6; border: 1px solid var(--line); letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
-.pow.up { color: var(--good); border-color: #4cd17a66; } .pow.down { color: var(--bad); border-color: #ff5a5f66; }
-.donchip { font-weight: 800; font-size: 11.5px; padding: 1px 6px; border-radius: 6px; background: var(--gold); color: #3a2c00; }
+#phase { position: absolute; left: 340px; top: 457px; padding: 3px 12px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); font-size: 12px; color: var(--dim); }
+#battle { position: absolute; left: 50%; top: 470px; transform: translate(-50%, -50%); padding: 6px 18px; border-radius: 999px; font-weight: 900; font-size: 22px;
+  background: rgba(40, 8, 12, .92); border: 2px solid var(--red); box-shadow: 0 0 24px rgba(255,77,77,.6); display: none; gap: 14px; align-items: center; z-index: 600; pointer-events: none; }
+#battle .vs { color: var(--red); font-size: 14px; }
+#battle .win { color: var(--green); } #battle .lose { color: #ffb3b3; }
 
-/* highlights */
-.card.picked { box-shadow: 0 0 0 3px var(--pick), 0 0 18px var(--pick); }
-.card.attacker { box-shadow: 0 0 0 3px var(--bad), 0 0 20px var(--bad); }
-.card.target { box-shadow: 0 0 0 3px #fff, 0 0 18px #fffa; }
-.card.picked.attacker, .card.picked.target { box-shadow: 0 0 0 3px var(--pick), 0 0 0 6px var(--bad), 0 0 20px var(--bad); }
-.slot.new .card { animation: pop .35s ease-out; }
-@keyframes pop { from { transform: scale(.6); opacity: 0; } }
-.slot.rested.new .card { animation: none; }
-
-/* live play */
-.card.can { box-shadow: 0 0 0 2px var(--good), 0 0 14px -2px var(--good); cursor: pointer; }
-.card.focus { box-shadow: 0 0 0 3px var(--gold), 0 0 20px var(--gold); transform: translateY(-4px); }
-.card.aim { box-shadow: 0 0 0 3px var(--bad), 0 0 18px var(--bad); cursor: crosshair; animation: aim 1s ease-in-out infinite alternate; }
-@keyframes aim { to { box-shadow: 0 0 0 3px var(--bad), 0 0 6px var(--bad); } }
-.slot.rested .card.focus { transform: rotate(90deg) scale(.8); }
-.pile.don.can img { box-shadow: 0 0 0 2px var(--good), 0 0 14px -2px var(--good); cursor: pointer; }
-.pile.don.focus img { box-shadow: 0 0 0 3px var(--gold), 0 0 18px var(--gold); }
-.opts li.live { color: var(--text); background: var(--panel2); border-color: var(--line); cursor: pointer; display: flex; gap: 8px; }
-.opts li.live:hover { border-color: var(--good); background: #4cd17a14; }
-.opts li.live kbd { font: 11px/18px ui-monospace, monospace; color: var(--dim); min-width: 16px; text-align: center; }
-.yourmove { color: var(--good); }
-.hint { color: var(--faint); font-size: 12px; margin-top: 6px; }
-.livebtns { display: flex; gap: 6px; }
-.livebtns button { padding: 4px 10px; }
-
-/* middle strip */
-.mid { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 36px; flex-wrap: wrap; }
-.pill { padding: 4px 12px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); color: var(--dim); font-size: 13px; }
-.pill b { color: var(--text); }
-.battle { display: flex; align-items: center; gap: 8px; padding: 3px 12px 3px 4px; border-radius: 999px; background: #3a1820; border: 1px solid #7a3340; color: #ffd9de; font-weight: 600; font-size: 13px; }
-.battle img { width: 22px; height: 30px; border-radius: 3px; object-fit: cover; }
-.battle .arrow { color: var(--bad); }
-
-/* zoom */
-#zoom { position: fixed; z-index: 50; pointer-events: none; width: 300px; border-radius: 14px; overflow: hidden; display: none;
-  box-shadow: 0 18px 50px #000e, 0 0 0 1px #ffffff1a; background: var(--panel2); }
-#zoom img { display: block; width: 100%; }
-#zoom .zt { padding: 10px 12px; font-size: 13px; }
-
-/* side panel */
-aside { grid-area: side; border-left: 1px solid var(--line); overflow: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 16px; background: var(--panel); }
-aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 0 0 7px; font-weight: 650; }
-.step { font-size: 20px; font-weight: 700; line-height: 1.2; }
-.step small { display: block; font-size: 13px; color: var(--dim); font-weight: 400; margin-top: 2px; }
-.decision .q { font-size: 13.5px; }
-.opts { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
-.opts li { padding: 5px 9px; border-radius: 7px; color: var(--dim); font-size: 13px; border: 1px solid transparent; }
-.opts li.chosen { color: var(--text); border-color: var(--pick); background: #b98cff1c; font-weight: 600; }
-.opts li.chosen::before { content: "\2192  "; color: var(--pick); }
-.opts li.more { font-style: italic; color: var(--faint); cursor: pointer; }
-.events { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
-.events li { background: var(--panel2); border-radius: 7px; padding: 6px 9px; font-size: 13px; border-left: 3px solid var(--line); }
-.events li.l0 { border-left-color: var(--p0); } .events li.l1 { border-left-color: var(--p1); }
-.events li.turnline { background: transparent; border: 0; color: var(--dim); padding: 2px 0; font-weight: 650; }
-.events li.none { background: transparent; border: 0; color: var(--faint); padding: 0; }
-.detail { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
-.detail img.big { width: 100%; border-radius: 12px; box-shadow: 0 6px 20px #000a; }
-.detail .title { font-weight: 700; font-size: 15px; }
-.detail .title span { color: var(--dim); font-weight: 400; font-size: 12px; }
-.detail .meta { color: var(--dim); font-size: 12px; }
-.detail p { margin: 0; white-space: pre-wrap; }
-.detail .un { color: var(--bad); font-size: 12px; }
-.trashgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); gap: 6px; }
-.trashgrid .t { aspect-ratio: 63 / 88; border-radius: 5px; overflow: hidden; cursor: zoom-in; background: var(--panel2); font-size: 9.5px; padding: 3px; }
-.trashgrid .t img { width: 100%; height: 100%; object-fit: cover; display: block; margin: -3px; width: calc(100% + 6px); height: calc(100% + 6px); }
-.empty { color: var(--faint); font-size: 12.5px; font-style: italic; }
-
-/* controls */
-#ctl { grid-area: ctl; display: flex; align-items: center; gap: 10px; padding: 9px 18px; border-top: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
-.group { display: flex; gap: 4px; }
-button, select { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; font: inherit; font-size: 13px; cursor: pointer; }
-button:hover, select:hover { border-color: #46506a; }
-button.primary { background: #3b3160; border-color: #5b4a94; min-width: 86px; font-weight: 600; }
-#timeline { flex: 1; min-width: 160px; accent-color: var(--pick); }
-label { color: var(--dim); display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
-.keys { color: var(--faint); font-size: 12px; }
-
-@media (max-width: 1100px) {
-  :root { --cw: clamp(48px, (100vw - 240px) / 9.4, 110px); }
-  body { grid-template-columns: 1fr; grid-template-rows: auto auto auto auto; grid-template-areas: "top" "board" "side" "ctl"; height: auto; }
-  aside { border-left: 0; border-top: 1px solid var(--line); }
-  #ctl { position: sticky; bottom: 0; }
-  #zoom { display: none !important; }
-}
+#pop { position: absolute; z-index: 800; display: none; flex-direction: column; gap: 4px; padding: 6px; min-width: 200px; max-width: 320px; background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,.6); }
+#pop .btn { text-align: left; }
+#banner { position: absolute; left: 330px; right: 330px; top: 420px; text-align: center; font-size: 72px; pointer-events: none; opacity: 0; z-index: 700;
+  text-shadow: 0 4px 20px #000, 0 0 30px rgba(244,197,66,.5); color: var(--gold); transition: opacity .35s, transform .35s; transform: scale(.9); }
+#banner.show { opacity: 1; transform: scale(1); }
+#toast { position: absolute; left: 800px; top: 492px; transform: translateX(-50%); max-width: 760px; padding: 8px 18px; border-radius: 12px; background: rgba(10,12,18,.92);
+  border: 1px solid var(--line); font-size: 15px; pointer-events: none; opacity: 0; transition: opacity .25s; z-index: 650; text-align: center; }
+#toast.show { opacity: 1; }
+#modal { position: absolute; inset: 0; z-index: 950; display: none; place-items: center; background: rgba(0,0,0,.55); backdrop-filter: blur(2px); }
+#modal .box { min-width: 420px; max-width: 1180px; padding: 22px 26px; border-radius: 18px; background: var(--panel2); border: 1px solid var(--line); box-shadow: 0 20px 60px rgba(0,0,0,.7);
+  display: flex; flex-direction: column; gap: 16px; align-items: center; text-align: center; }
+#modal h2 { margin: 0; font-size: 30px; color: var(--gold); }
+#modal .q { color: var(--dim); font-size: 15px; max-width: 760px; }
+#modal .row { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; max-height: 600px; overflow: auto; padding: 8px; }
+#modal .pick { width: 150px; display: flex; flex-direction: column; gap: 6px; align-items: center; cursor: pointer; font-size: 12px; color: var(--dim); }
+#modal .pick .im { position: relative; width: 150px; height: 209px; border-radius: 9px; overflow: hidden; background: #f2eee4; color: #222; box-shadow: 0 6px 16px rgba(0,0,0,.6);
+  transition: transform .15s, box-shadow .15s; display: grid; place-items: center; padding: 8px; font-weight: 700; }
+#modal .pick .im img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+#modal .pick:hover .im { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--gold), 0 10px 24px rgba(0,0,0,.7); }
+#modal .pick.off { cursor: default; } #modal .pick.off:hover .im { transform: none; box-shadow: 0 6px 16px rgba(0,0,0,.6); }
+#modal .btns { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+#modal .btns .btn { padding: 10px 18px; font-size: 15px; }
+#modal .btn.big { padding: 12px 26px; font-size: 18px; }
 </style>
 </head>
 <body>
-<header>
-  <h1 id="title"></h1>
-  <span class="meta" id="meta"></span>
-  <span class="result" id="result"></span>
-  <span class="livebtns" id="livebtns" hidden><button id="concede">Concede</button><button id="newgame">New game</button></span>
-</header>
-<main id="board"></main>
-<aside>
-  <div class="step" id="step"></div>
-  <section class="decision" id="decision"></section>
-  <section><h2>What happened</h2><ul class="events" id="events"></ul></section>
-  <section id="detail"></section>
-</aside>
-<div id="ctl">
-  <div class="group">
-    <button id="prevTurn" title="Previous turn (PageUp)">&#x23EE;</button>
-    <button id="prev" title="Previous step (Left arrow)">&#x25C0;</button>
-    <button id="play" class="primary" title="Play / pause (Space)">&#x25B6; Play</button>
-    <button id="next" title="Next step (Right arrow)">&#x25B6;</button>
-    <button id="nextTurn" title="Next turn (PageDown)">&#x23ED;</button>
+<div id="backdrop"></div>
+<div id="stage">
+  <div id="zones"></div>
+  <div class="mid-line"></div>
+  <div id="phase"></div>
+  <div id="cards"></div>
+  <svg id="arrows" viewBox="0 0 1600 1000"><defs>
+    <marker id="head" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#ff4d4d"/></marker>
+    <marker id="headg" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f4c542"/></marker>
+  </defs></svg>
+  <div id="battle"></div>
+  <div id="toast"></div>
+  <div id="banner" class="title"></div>
+
+  <div class="panel" id="preview"><div class="big" id="pvImg">Hover a card</div><div class="info" id="pvInfo"></div></div>
+  <div class="panel" id="side">
+    <div class="top"><span class="ttl" id="ttl"></span><span id="liveBtns" hidden><button class="btn danger" id="concede">Concede</button> <button class="btn" id="newgame">New game</button></span></div>
+    <div class="who-row" id="plate1"></div>
+    <div class="who-row" id="plate0"></div>
+    <div id="prompt"></div>
+    <div id="log"></div>
+    <div id="hist">
+      <button class="btn" id="hBack" title="Step back (←)">◀</button>
+      <button class="btn" id="hPlay" title="Play / pause (space)">▶</button>
+      <button class="btn" id="hFwd" title="Step forward (→)">▶▏</button>
+      <input type="range" id="hBar" min="0" value="0" aria-label="Timeline">
+      <button class="btn" id="hLive" title="Back to the present (End)">Now</button>
+    </div>
   </div>
-  <input type="range" id="timeline" min="0" value="0" aria-label="Timeline">
-  <label>Speed <select id="speed"><option value="2500">Slow</option><option value="1300" selected>Normal</option><option value="600">Fast</option><option value="200">Very fast</option></select></label>
-  <label id="handsLabel">Hands <select id="hands"><option value="both">Both</option><option value="0">P0 only</option><option value="1">P1 only</option><option value="none">Hidden</option></select></label>
-  <label><input type="checkbox" id="eventsOnly" checked> Skip quiet steps</label>
-  <span class="keys" id="keys">&larr; &rarr; step &middot; space play &middot; PgUp/PgDn turn</span>
+  <div id="pop"></div>
+  <div id="modal"><div class="box" id="mbox"></div></div>
 </div>
-<div id="zoom"></div>
 <script>
 const R = /*REPLAY_DATA*/null;
 const F = R.frames, C = R.cards, A = R.art || null;
-// Live play (optcg.web): frames arrive from the server and the person in seat ME answers the last one.
-const LIVE = R.live || null, ME = LIVE ? LIVE.human : 0;
-let focus = null, busy = false;
-const COLORS = { red: "var(--red)", green: "var(--green)", blue: "var(--blue)", purple: "var(--purple)", black: "var(--black)", yellow: "var(--yellow)" };
-let i = 0, timer = null, prevUids = new Set(), selected = null;
-
+const LIVE = R.live || null;
+const BOT = LIVE ? LIVE.human : 0;     // the seat at the bottom of the table
+const W = 92, H = 128, CX = 800, MY = 470;
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+const asset = p => A && p ? encodeURI(A.base + "/" + p) : null;
+const art = id => asset(A && A.cards && A.cards[id]);
 const short = p => R.players[p].leader.replace(/^\(.*?\)\s*/, "");
-const pname = p => `<span class="p${p}">${esc(short(p))}</span>`;
-const asset = path => A && path ? encodeURI(A.base + "/" + path) : null;
-const art = id => asset(A && A.cards[id]);
-const img = (src, cls = "") => src ? `<img src="${src}" class="${cls}" alt="" onerror="this.remove()">` : "";
+const COLORS = { red: "#d64545", green: "#2e9e5b", blue: "#3b6fd8", purple: "#8a4fd1", black: "#444", yellow: "#e0b400" };
 
-function stripe(cols) {
-  const c = cols.map(x => COLORS[x] || "#999");
-  return c.length === 1 ? c[0] : `linear-gradient(90deg, ${c.map((x, k) => `${x} ${k * 100 / c.length}%, ${x} ${(k + 1) * 100 / c.length}%`).join(", ")})`;
-}
+let i = 0;                       // the frame on the table
+let shownFrame = null;           // the frame drawn last, for animating from
+let timer = null, busy = false, playing = null;
+let ui = { mode: null, src: null };   // targeting: "attack" (src = attacker) or "don"
 
-// The text card sits under the art, so a missing image still leaves a readable card.
-function textCard(d, cost) {
-  return `<div class="tc"><div class="stripe" style="background:${stripe(d.col)}"></div>
-    <div class="tcost">${d.cat === "Leader" ? d.life : cost}</div><div class="tname">${esc(d.n)}</div><div class="tcat">${esc(d.cat)}</div></div>`;
-}
+// ------------------------------------------------------------------ layout
 
-function cardHTML(c, opts = {}) {
-  const d = C[c.i], f = F[i];
-  const cls = ["card"];
-  if (f.d && f.d.hl.includes(c.u)) cls.push("picked");
-  if (f.b && f.b[0] === c.u) cls.push("attacker");
-  if (f.b && f.b[1] === c.u) cls.push("target");
-  if (myMove()) {
-    const acts = actions();
-    if (focus === c.u) cls.push("focus");
-    else if (focus !== null && acts.some(a => isFocused(a) && a.t === c.u)) cls.push("aim");
-    else if (focus === null && acts.some(a => a.c === c.u)) cls.push("can");
-  }
-  const slot = ["slot"];
-  if (opts.hand) slot.push("hand-card");
-  if (c.r) slot.push("rested");
-  if (opts.field && i > 0 && !prevUids.has(c.u)) slot.push("new");
+const mine = p => p === BOT;
+const pt = (p, x, y) => mine(p) ? [x, y] : [2 * CX - x, 2 * MY - y];   // the opponent sits across the table
+const SLOT_X = [500, 650, 800, 950, 1100];
+const POS = { leader: [800, 690], stage: [950, 690], deck: [1230, 690], life: [380, 690], dondeck: [380, 798], trash: [1230, 812], hand: [800, 924] };
 
-  const cost = c.c ?? d.cost;
-  const costBadge = c.c !== undefined && c.c !== d.cost && d.cat !== "Leader"
-    ? `<div class="badge-cost ${c.c > d.cost ? "up" : "down"}" title="Cost ${c.c} (printed ${d.cost})">${c.c}</div>` : "";
-  const kws = (c.k || []).map(k => `<span class="${k === "Can't attack" ? "neg" : ""}">${esc(k)}</span>`).join("");
-  let cap = "";
-  if (!opts.hand) {
-    const pc = c.p === undefined ? "" : c.p > d.pow ? "up" : c.p < d.pow ? "down" : "";
-    cap = `<div class="cap">${c.p !== undefined ? `<span class="pow ${pc}">${c.p}</span>` : ""}${c.n ? `<span class="donchip" title="${c.n} DON!! attached">+${c.n}</span>` : ""}</div>`;
-  }
-  return `<div class="${slot.join(" ")}"><div class="cbox"><div class="${cls.join(" ")}" data-id="${esc(c.i)}" data-u="${c.u}">
-    ${textCard(d, cost)}${img(art(c.i))}${costBadge}${kws ? `<div class="kws">${kws}</div>` : ""}
-  </div></div>${cap}</div>`;
-}
+// Zones cut from the official playmat: [x, y, w, h] in its 1414 x 1000 image.
+const MAT = { chars: [190, 38, 1190, 284], leader: [705, 360, 198, 278], stage: [940, 360, 198, 278], deck: [1175, 360, 198, 278],
+  dondeck: [42, 682, 192, 268], cost: [272, 665, 871, 302], trash: [1178, 682, 192, 268] };
+const ZONES = [
+  ["chars", 800, 544, 760, 142, "Character Area"], ["leader", 800, 690, 104, 142, "Leader"], ["stage", 950, 690, 104, 142, "Stage"],
+  ["deck", 1230, 690, 104, 142, "Deck"], ["life", 380, 690, 112, 142, "Life"], ["dondeck", 380, 798, 72, 64, "DON!!"],
+  ["cost", 805, 798, 676, 64, "Cost Area"], ["trash", 1230, 812, 80, 104, "Trash"]];
 
-function backHTML() {
-  return `<div class="slot hand-card"><div class="cbox"><div class="card back">${img(asset(A && A.back)) ||
-    `<div class="tc" style="background:repeating-linear-gradient(45deg,#5a2323,#5a2323 6px,#4a1b1b 6px,#4a1b1b 12px)"></div>`}</div></div></div>`;
-}
-
-function pile(label, count, face, extra = "", attrs = "") {
-  return `<div class="zone"><div class="pile ${count ? "" : "empty"} ${extra}" ${attrs}>${face}${count ? `<span class="num">${count}</span>` : ""}</div><div class="lbl">${label}</div></div>`;
-}
-
-function lifeHTML(s) {
-  const n = s.life.length, step = 9;
-  const back = asset(A && A.back);
-  const cards = s.life.map((id, k) => id
-    ? `<div class="lc up" data-id="${esc(id)}" style="top:${k * step}px">${img(art(id)) || textCard(C[id], C[id].cost)}</div>`
-    : `<div class="lc" style="top:${k * step}px">${img(back) || `<div class="tc" style="background:#5a2323"></div>`}</div>`).join("");
-  return `<div class="zone"><div class="lbl">Life <b>${n}</b></div>
-    <div class="lifestack" style="height:calc(var(--pw) * 1.397 + ${Math.max(0, n - 1) * step}px)">${cards || `<div class="pile empty"></div>`}</div></div>`;
-}
-
-function sideHTML(p, f, top) {
-  const s = f.s[p], [da, dr, dd] = s.don;
-  const mine = f.tp === p && f.t > 0;
-
-  const mode = $("hands").value, show = LIVE ? p === ME : mode === "both" || mode === String(p);
-  const overlap = s.H.length > 7 ? -0.45 : s.H.length > 5 ? -0.25 : -0.06;
-  const hand = `<div class="hand" style="--overlap:${overlap}">${s.H.map(c => show ? cardHTML(c, { hand: true }) : backHTML()).join("")}
-    <span class="count">${s.H.length ? `${s.H.length} in hand` : "Empty hand"}</span></div>`;
-  const agent = R.players[p].agent;
-  const tag = `<div class="tag"><span class="who">P${p} &middot; ${esc(short(p))}</span>${agent ? `<span class="agent">${esc(agent)}</span>` : ""}
-    ${mine ? `<span class="turnflag">CURRENT TURN</span>` : ""}</div>`;
-  const handrow = `<div class="handrow">${tag}${hand}</div>`;
-
-  const chars = s.C.map(c => cardHTML(c, { field: true })).join("") + `<div class="ghost"></div>`.repeat(Math.max(0, 5 - s.C.length));
-  const topTrash = s.trash[s.trash.length - 1];
-  const piles = `<div class="piles">
-    ${pile(`Deck`, s.deck, img(asset(A && A.back)))}
-    ${pile(`Trash`, s.trash.length, topTrash ? (img(art(topTrash)) || `<div class="face" style="background:#2a2f3a"></div>`) : "", "click", `data-trash="${p}"`)}
-    ${pile(`DON!!`, da, img(asset(A && A.don)), `don ${p === ME && myMove() ? (focus === "don" ? "focus" : actions().some(a => a.k === "give_don") ? "can" : "") : ""}`,
-      `title="${da} active DON!!" ${p === ME ? "data-don" : ""}`)}
-    ${pile(`Rested`, dr, img(asset(A && A.don)), "don rested", `title="${dr} rested DON!!, ${dd} left in the DON!! deck"`)}
-  </div>`;
-  const mat = `<div class="mat">${lifeHTML(s)}<div class="divider"></div>
-    <div class="zone">${cardHTML(s.L, { field: true })}</div>
-    <div class="zone stage">${s.S ? cardHTML(s.S, { field: true }) : `<div class="ghost"></div><div class="lbl">Stage</div>`}</div>
-    <div class="divider"></div><div class="chars">${chars}</div><div class="divider"></div>${piles}</div>`;
-
-  const cols = C[R.players[p].id].col.map(c => COLORS[c] || "#888");
-  const wash = `--c1:${cols[0]};--c2:${cols[cols.length - 1]}`;
-  return `<section class="side s${p} ${top ? "top" : ""} ${mine ? "turn" : ""}" style="${wash}">${top ? handrow + mat : mat + handrow}</section>`;
-}
-
-function findCard(f, u) { for (const s of f.s) for (const c of [s.L, ...s.C]) if (c.u === u) return c; }
-
-function render() {
-  const f = F[i];
-  let mid = `<span class="pill">${f.t ? `Turn <b>${f.t}</b> &middot; ${pname(f.tp)}` : "Setup"} &middot; ${esc(f.ph.replace(/_/g, " "))}</span>`;
-  if (f.b) {
-    const a = findCard(f, f.b[0]), t = findCard(f, f.b[1]);
-    if (a && t) mid += `<span class="battle">${img(art(a.i))}${esc(C[a.i].n)} <b>${a.p}</b> <span class="arrow">&#x27F6;</span> ${img(art(t.i))}${esc(C[t.i].n)} <b>${t.p}</b></span>`;
-  }
-  $("board").innerHTML = sideHTML(1 - ME, f, true) + `<div class="mid">${mid}</div>` + sideHTML(ME, f, false);
-
-  $("step").innerHTML = `${f.t ? `Turn ${f.t}` : "Setup"}<small>Step ${i + 1} of ${F.length}</small>`;
-  const lines = f.log.map(l => {
-    const m = l.replace(/^\[T\d+\] /, "");
-    if (m.startsWith("---")) return `<li class="turnline">${esc(m.replace(/-+/g, "").trim())}</li>`;
-    const who = /^Player ([01])\b/.exec(m);
-    return `<li class="${who ? "l" + who[1] : ""}">${esc(m)}</li>`;
-  });
-  $("events").innerHTML = lines.join("") || `<li class="none">Nothing new since the last step</li>`;
-
-  if (myMove()) {
-    const d = f.d, own = focus === null ? null : actions().filter(isFocused).map(a => a.n);
-    const shown = d.o.map((o, k) => ({ o, k })).filter(x => !own || own.includes(x.k));
-    $("decision").innerHTML = `<h2 class="yourmove">Your move</h2><div class="q">${esc(d.q || d.kind)}</div>
-      <ul class="opts">${shown.map(({ o, k }) => `<li class="live" data-opt="${k}"><kbd>${k < 9 ? k + 1 : ""}</kbd><span>${esc(o)}</span></li>`).join("")}
-      ${own ? `<li class="more" id="unfocus">Show all ${d.o.length} options</li>` : ""}</ul>
-      <div class="hint">${busy ? "Waiting for the bot&hellip;" : focus !== null ? "Click a red target, or an option above. Esc to cancel."
-        : "Click a glowing card, or an option. Number keys pick options."}</div>`;
-    const u = $("unfocus"); if (u) u.onclick = () => { focus = null; render(); };
-  } else if (f.d && LIVE && f.d.pl !== ME) {
-    const d = f.d;
-    $("decision").innerHTML = `<h2>Bot &middot; ${pname(d.pl)}</h2><div class="q">${esc(d.q || d.kind)}</div>
-      <ul class="opts"><li class="chosen">${d.o.length ? esc(d.o[0]) : "<i>(hidden choice)</i>"}</li></ul>
-      <div class="hint">out of ${d.n} option${d.n === 1 ? "" : "s"}${i < F.length - 1 ? " &middot; End jumps to now" : ""}</div>`;
-  } else if (f.d && LIVE) {
-    $("decision").innerHTML = `<h2>You chose</h2><ul class="opts"><li class="chosen">${esc(f.d.o[f.d.pick] ?? "")}</li></ul>
-      <div class="hint">End jumps to now</div>`;
-  } else if (f.d) {
-    const d = f.d;
-    const MAX = 8;
-    let opts = d.o.map((o, k) => ({ o, k }));
-    if (opts.length > MAX && !showAllOpts) {
-      const keep = new Set([d.pick, ...opts.slice(0, MAX - 1).map(x => x.k)]);
-      opts = opts.filter(x => keep.has(x.k));
+function drawZones() {
+  let html = "";
+  for (const p of [0, 1]) {
+    const mat = A && A.mats ? asset(A.mats[p]) : null;
+    for (const [name, x0, y0, w, h, label] of ZONES) {
+      const [x, y] = pt(p, x0, y0);
+      let bg = "";
+      if (mat && MAT[name]) {
+        const [mx, my, mw, mh] = MAT[name];
+        const s = Math.max(w / mw, h / mh);
+        bg = `background-image:url('${mat}');background-size:${1414 * s}px ${1000 * s}px;` +
+             `background-position:${-(mx * s + (mw * s - w) / 2)}px ${-(my * s + (mh * s - h) / 2)}px;`;
+      }
+      const lbl = mat && MAT[name] ? "" : `<div class="lbl title">${label}</div>`;
+      html += `<div class="zone ${mine(p) ? "" : "top"}" data-zone="${name}:${p}" style="left:${x - w / 2}px;top:${y - h / 2}px;width:${w}px;height:${h}px;${bg}">${lbl}</div>`;
     }
-    const more = d.o.length > opts.length ? `<li class="more" id="moreOpts">+ ${d.o.length - opts.length} more options</li>` : "";
-    $("decision").innerHTML = `<h2>Decision &middot; P${d.pl} ${pname(d.pl)}</h2><div class="q">${esc(d.q || d.kind)}</div>
-      <ul class="opts">${opts.map(({ o, k }) => `<li class="${k === d.pick ? "chosen" : ""}">${esc(o)}</li>`).join("")}${more}</ul>`;
-    const m = $("moreOpts"); if (m) m.onclick = () => { showAllOpts = true; render(); };
-  } else {
-    const w = R.winner;
-    const verdict = LIVE ? (w === null ? "Draw" : w === ME ? "You win!" : "You lose") : w === null ? "Draw" : pname(w) + " wins";
-    $("decision").innerHTML = `<h2>Game over</h2><div class="step">${verdict}</div>`;
   }
-  renderDetail();
-  $("timeline").value = i;
-  prevUids = new Set(f.s.flatMap(s => [s.L, s.S, ...s.C].filter(Boolean).map(c => c.u)));
-}
-let showAllOpts = false;
-
-function cardInfo(id) {
-  const d = C[id];
-  const stats = [d.cat, d.col.map(c => c[0].toUpperCase() + c.slice(1)).join("/")];
-  stats.push(d.cat === "Leader" ? `Life ${d.life}` : `Cost ${d.cost}`);
-  if (d.pow) stats.push(`${d.pow} power`);
-  if (d.cnt) stats.push(`Counter +${d.cnt}`);
-  return `<div class="title">${esc(d.n)} <span>${esc(id)}</span></div>
-    <div class="meta">${esc(stats.join(" · "))}${d.ty.length ? "<br>" + esc(d.ty.join(" / ")) : ""}</div>
-    ${d.txt ? `<p>${esc(d.txt)}</p>` : ""}${d.trg ? `<p>${esc(d.trg)}</p>` : ""}
-    ${d.un.length ? `<p class="un">Not implemented: ${esc(d.un.join(" / "))}</p>` : ""}`;
+  $("zones").innerHTML = html;
 }
 
-function renderDetail() {
-  if (!selected) { $("detail").innerHTML = `<h2>Card</h2><div class="empty">Hover a card to zoom in, click it to keep it here.</div>`; return; }
-  if (selected.trash !== undefined) {
-    const t = F[i].s[selected.trash].trash;
-    $("detail").innerHTML = `<h2>P${selected.trash} trash &middot; ${t.length}</h2>${t.length
-      ? `<div class="trashgrid">${t.slice().reverse().map(id => `<div class="t" data-id="${esc(id)}" title="${esc(C[id].n)}">${img(art(id)) || esc(C[id].n)}</div>`).join("")}</div>`
-      : `<div class="empty">Empty</div>`}`;
+/** Every card on the table in frame f: where it goes and what it shows. */
+function layout(f) {
+  const out = [];
+  const add = o => out.push(o);
+  for (const p of [0, 1]) {
+    const s = f.s[p];
+    const at = (x, y) => pt(p, x, y);
+    s.C.forEach((c, k) => { const [x, y] = at(SLOT_X[k] ?? 1100, 544); add({ key: "u" + c.u, c, p, x, y, s: 1, z: 20, zone: "char" }); });
+    { const [x, y] = at(...POS.leader); add({ key: "u" + s.L.u, c: s.L, p, x, y, s: 1, z: 20, zone: "leader" }); }
+    if (s.S) { const [x, y] = at(...POS.stage); add({ key: "u" + s.S.u, c: s.S, p, x, y, s: 1, z: 20, zone: "stage" }); }
+    // Life: a stack of sideways cards; the top one (next to be taken) is drawn highest
+    const n = s.life.length, step = n > 1 ? Math.min(16, 84 / (n - 1)) : 0;
+    s.life.forEach((id, k) => {
+      const [x, y] = at(380, 690 + ((n - 1) / 2 - k) * step);
+      add({ key: `life${p}:${k}`, id, back: !id, p, x, y, s: .6, z: 5 + k, zone: "life" });
+    });
+    // DON!! in the cost area: active first, then rested
+    const [da, dr, dd] = s.don, nd = da + dr, dstep = nd > 1 ? Math.min(48, 600 / (nd - 1)) : 0;
+    for (let k = 0; k < nd; k++) {
+      const [x, y] = at(500 + k * dstep, 798);
+      add({ key: `don${p}:${k}`, don: true, rested: k >= da, p, x, y, s: .45, z: 6 + k, zone: "cost" });
+    }
+    if (s.deck) { const [x, y] = at(...POS.deck); add({ key: `deck${p}`, back: true, pile: s.deck, p, x, y, s: 1, z: 4, zone: "deck" }); }
+    { const [x, y] = at(...POS.dondeck); add({ key: `dondeck${p}`, donback: true, pile: dd, p, x, y, s: .45, z: 4, zone: "dondeck" }); }
+    if (s.trash.length) { const [x, y] = at(...POS.trash);
+      add({ key: `trash${p}`, id: s.trash[s.trash.length - 1], pile: s.trash.length, p, x, y, s: .75, z: 4, zone: "trash" }); }
+    // hands: yours fanned along the bottom edge, the opponent's peeking in at the top
+    const hn = s.H.length, faceUp = s.H.some(c => c.u !== undefined);
+    const scale = mine(p) ? 1.15 : (faceUp ? .78 : .6);
+    const spread = mine(p) ? 600 : 460, pitch = mine(p) ? 112 : (faceUp ? 76 : 60);
+    const hstep = hn > 1 ? Math.min(pitch, spread / (hn - 1)) : 0;
+    s.H.forEach((c, k) => {
+      const off = k - (hn - 1) / 2;
+      const x = CX + (mine(p) ? off : -off) * hstep;
+      const y = mine(p) ? 924 + off * off * 1.2 : (faceUp ? 56 : 34);
+      if (c.u !== undefined) add({ key: "u" + c.u, c, p, x, y, s: scale, rot: mine(p) ? off * 1.6 : 0, z: 100 + k, zone: "hand" });
+      else add({ key: `oh${p}:${k}`, back: true, flip: true, p, x, y, s: scale, z: 100 + k, zone: "ohand" });
+    });
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ drawing cards
+
+const els = new Map();
+function img(src) { return src ? `<img src="${src}" alt="" draggable="false" onerror="this.remove()">` : ""; }
+
+function faceHTML(it) {
+  if (it.don) return img(asset(A && A.don)) || `<div class="tx" style="background:#f4c542;border:0">DON!!</div>`;
+  if (it.donback) return img(asset(A && (A.donBack || A.don))) || `<div class="tx" style="background:#8a6d1a;border:0">DON!!</div>`;
+  if (it.empty) return `<div class="tx" style="background:rgba(0,0,0,.2);border:0"></div>`;
+  if (it.back) return img(asset(A && A.back)) || `<div class="tx" style="background:repeating-linear-gradient(45deg,#5a2323,#5a2323 6px,#4a1b1b 6px,#4a1b1b 12px);border:0"></div>`;
+  const id = it.c ? it.c.i : it.id, d = C[id];
+  const stripe = (d.col || []).map(c => COLORS[c] || "#999")[0] || "#999";
+  return `<div class="tx" style="--stripe:${stripe}">${esc(d.n)}<small>${esc(d.cat)}${d.cat === "Leader" ? "" : " · cost " + d.cost}</small></div>` + img(art(id));
+}
+
+function badgesHTML(it, ctr) {
+  let h = "";
+  if (it.pile !== undefined && it.pile > 0) h += `<div class="cnt">${it.pile}</div>`;
+  const c = it.c;
+  if (!c) return h;
+  const d = C[c.i];
+  if (it.zone === "char" || it.zone === "leader") {
+    h += `<div class="pw ${c.p > d.pow ? "up" : c.p < d.pow ? "down" : ""}">${c.p}</div>`;
+    if (c.n) h += `<div class="dn">+${c.n}</div>`;
+    for (let k = 0; k < Math.min(3, c.n || 0); k++) h += `<div class="tuck" style="bottom:${6 + k * 9}%">${img(asset(A && A.don))}</div>`;
+  }
+  if (c.c !== undefined && d.cat !== "Leader" && c.c !== d.cost) h += `<div class="cst ${c.c > d.cost ? "up" : "down"}">${c.c}</div>`;
+  if (c.k && c.k.length && it.zone !== "hand") h += `<div class="kws">${c.k.map(k => `<span class="${k === "Can't attack" ? "neg" : ""}">${esc(k)}</span>`).join("")}</div>`;
+  if (ctr) h += `<div class="ctr">+${ctr}</div>`;
+  return h;
+}
+
+const xf = it => `translate(${it.x - W / 2}px, ${it.y - H / 2}px) scale(${it.s})`;
+const sig = it => [it.c ? it.c.i : it.id, it.back, it.don, it.donback, it.empty].join("|");
+
+function render(animate = true) {
+  const f = F[i], prev = shownFrame;
+  const marks = interactionMarks(f);
+  const origin = originFinder(prev, f);
+  const seen = new Set();
+  for (const it of layout(f)) {
+    seen.add(it.key);
+    let el = els.get(it.key), fresh = false;
+    if (!el) {
+      fresh = true;
+      el = document.createElement("div");
+      el.className = "card";
+      el.innerHTML = `<div class="lift"><div class="face"></div><div class="badges"></div></div>`;
+      $("cards").appendChild(el);
+      els.set(it.key, el);
+    }
+    el._it = it;
+    const face = el.querySelector(".face");
+    if (el._sig !== sig(it)) { face.innerHTML = faceHTML(it); el._sig = sig(it); }
+    const u = it.c ? it.c.u : null;
+    const m = (u !== null && marks.get(u)) || "";
+    const ctr = m.startsWith("ctr:") ? +m.slice(4) : 0;
+    el.querySelector(".badges").innerHTML = badgesHTML(it, ctr);
+    const cls = ["card"];
+    if (it.zone === "hand") cls.push("hand");
+    if (it.zone === "char" || it.zone === "leader" || it.zone === "stage") cls.push("field");
+    if (it.don) cls.push("don");
+    if (it.flip) cls.push("flip");
+    if ((it.c && it.c.r && it.zone !== "hand") || (it.don && it.rested) || it.zone === "life") cls.push("rested");
+    if (m) cls.push(ctr ? "can" : m);
+    if (f.b && u !== null) { if (f.b[0] === u) cls.push("attacker"); if (f.b[1] === u) cls.push("target"); }
+    if (f.d && f.d.pick !== null && u !== null && f.d.hl.includes(u)) cls.push("picked");
+    if (it.don && ui.mode === "don" && it.p === BOT && !it.rested) cls.push("sel");
+    if (ui.mode === "attack" && u === ui.src) cls.push("sel");
+    el.className = cls.join(" ");
+    face.style.transform = it.zone === "hand" && it.rot ? `rotate(${it.rot}deg)` : "";
+    el.style.zIndex = it.z;
+    if (fresh && animate && prev) {
+      const o = origin(it);
+      if (o) {
+        el.style.transition = "none";
+        el.style.transform = `translate(${o[0] - W / 2}px, ${o[1] - H / 2}px) scale(${it.s * .9})`;
+        el.style.opacity = "0";
+        el.getBoundingClientRect();
+        el.style.transition = "";
+      }
+    }
+    el.style.transform = xf(it);
+    el.style.opacity = "1";
+    el.style.pointerEvents = "";
+  }
+  for (const [k, el] of els) {
+    if (seen.has(k)) continue;
+    els.delete(k);
+    const dest = animate && prev ? destination(el._it, prev, f) : null;
+    if (dest) el.style.transform = `translate(${dest[0] - W / 2}px, ${dest[1] - H / 2}px) scale(${el._it.s * .8})`;
+    el.style.opacity = "0";
+    el.style.pointerEvents = "none";
+    setTimeout(() => el.remove(), animate ? 450 : 0);
+  }
+  shownFrame = f;
+  drawArrows();
+  drawBattle(f);
+  drawPanels(f);
+}
+
+/** Where a card that just appeared came from. */
+function originFinder(prev, f) {
+  if (!prev) return () => null;
+  return it => {
+    const p = it.p, s0 = prev.s[p], s1 = f.s[p];
+    if (it.zone === "hand" || it.zone === "ohand") return s1.life.length < s0.life.length ? pt(p, ...POS.life) : pt(p, ...POS.deck);
+    if (it.zone === "char" || it.zone === "stage") {
+      if (s1.H.length < s0.H.length) return pt(p, ...POS.hand);
+      if (s1.trash.length < s0.trash.length) return pt(p, ...POS.trash);
+      return pt(p, ...POS.deck);
+    }
+    if (it.zone === "life") return s1.H.length < s0.H.length ? pt(p, ...POS.hand) : pt(p, ...POS.deck);
+    if (it.don) return pt(p, ...POS.dondeck);
+    return null;
+  };
+}
+
+/** Where a card that just left went. */
+function destination(it, prev, f) {
+  const p = it.p, s0 = prev.s[p], s1 = f.s[p];
+  if (it.don) {
+    for (const c of [s1.L, ...s1.C]) {
+      const was = [s0.L, ...s0.C].find(x => x.u === c.u);
+      const el = els.get("u" + c.u);
+      if (el && (c.n || 0) > ((was && was.n) || 0)) return [el._it.x, el._it.y];
+    }
+    return pt(p, ...POS.dondeck);
+  }
+  if (s1.trash.length > s0.trash.length) return pt(p, ...POS.trash);
+  if (s1.H.length > s0.H.length) return pt(p, ...POS.hand);
+  if (s1.life.length > s0.life.length) return pt(p, ...POS.life);
+  return pt(p, ...POS.deck);
+}
+
+// ------------------------------------------------------------------ arrows and the battle readout
+
+function center(u) { const el = els.get("u" + u); return el ? [el._it.x, el._it.y] : null; }
+function arrowPath([x1, y1], [x2, y2]) {
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2 - Math.min(90, Math.abs(x2 - x1) * .25 + 30);
+  return `M${x1},${y1} Q${mx},${my} ${x2},${y2}`;
+}
+
+let dragArrow = null;    // [from, to, gold] while dragging an attack or a DON!!
+function drawArrows() {
+  const svg = $("arrows");
+  svg.querySelectorAll("path.arr").forEach(p => p.remove());
+  const add = (a, b, gold) => {
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p.setAttribute("class", "arr");
+    p.setAttribute("d", arrowPath(a, b));
+    p.setAttribute("fill", "none");
+    p.setAttribute("stroke", gold ? "#f4c542" : "#ff4d4d");
+    p.setAttribute("stroke-width", "7");
+    p.setAttribute("stroke-linecap", "round");
+    p.setAttribute("stroke-dasharray", "2 14");
+    p.setAttribute("marker-end", gold ? "url(#headg)" : "url(#head)");
+    p.style.filter = "drop-shadow(0 0 6px rgba(0,0,0,.85))";
+    svg.appendChild(p);
+  };
+  const f = F[i];
+  if (f.b) { const a = center(f.b[0]), t = center(f.b[1]); if (a && t) add(a, t, false); }
+  if (dragArrow) add(dragArrow[0], dragArrow[1], dragArrow[2]);
+}
+
+const findCard = (f, u) => { for (const s of f.s) for (const c of [s.L, ...s.C]) if (c.u === u) return c; };
+function drawBattle(f) {
+  const el = $("battle");
+  const a = f.b && findCard(f, f.b[0]), t = f.b && findCard(f, f.b[1]);
+  if (!a || !t) { el.style.display = "none"; return; }
+  el.innerHTML = `<span class="${a.p >= t.p ? "win" : "lose"}">${a.p}</span><span class="vs title">vs</span><span>${t.p}</span>`;
+  el.style.display = "flex";
+}
+
+// ------------------------------------------------------------------ side panel
+
+function drawPanels(f) {
+  for (const p of [0, 1]) {
+    const s = f.s[p], el = $(mine(p) ? "plate0" : "plate1");
+    const who = LIVE ? (p === BOT ? "You" : "Bot") : `P${p}`;
+    const agent = R.players[p].agent && !(LIVE && p === BOT) ? ` · ${esc(R.players[p].agent)}` : "";
+    el.innerHTML = `<span class="nm" style="color:${mine(p) ? "var(--green)" : "var(--blue)"}">${who} · ${esc(short(p))}<span style="color:var(--faint);font-weight:400;font-size:11px">${agent}</span></span>` +
+      `Life <b>${s.life.length}</b> · Hand <b>${s.H.length}</b> · Deck <b>${s.deck}</b> · DON!! <b>${s.don[0]}</b>/${s.don[0] + s.don[1]}`;
+    el.classList.toggle("turn", f.t > 0 && f.tp === p);
+  }
+  $("phase").textContent = f.t ? `Turn ${f.t} · ${f.ph.replace(/_/g, " ")}` : "Setup";
+  $("ttl").textContent = LIVE ? (R.over ? "Game over" : `Seed ${R.seed}`) : `Replay · seed ${R.seed}`;
+  drawPrompt(f);
+  drawLog();
+  drawHistory();
+}
+
+function drawLog() {
+  const lines = [];
+  for (let k = 0; k <= i; k++) {
+    for (const l of F[k].log) {
+      const m = l.replace(/^\[T\d+\] /, "");
+      if (m.startsWith("---")) { lines.push(`<div class="t">${esc(m.replace(/-+/g, "").trim())}</div>`); continue; }
+      const who = /^Player ([01])\b/.exec(m);
+      lines.push(`<div class="l ${who ? (+who[1] === BOT ? "me" : "them") : ""} ${k === i ? "new" : ""}">${esc(m)}</div>`);
+    }
+  }
+  const log = $("log");
+  log.innerHTML = lines.join("");
+  log.scrollTop = log.scrollHeight;
+}
+
+function drawHistory() {
+  $("hBar").max = Math.max(0, F.length - 1);
+  $("hBar").value = i;
+  $("hPlay").textContent = playing ? "❚❚" : "▶";
+  $("hLive").disabled = i === F.length - 1;
+}
+
+// ------------------------------------------------------------------ the player's decisions
+
+function myMove() {
+  const f = F[i];
+  return !!(LIVE && !R.over && !busy && !playing && i === F.length - 1 && f && f.d && f.d.pick === null && f.d.pl === BOT);
+}
+function actions() {
+  return myMove() ? F[i].d.act.map(([k, c, t, idx, ci, ti], n) => ({ k, c, t, idx, ci, ti, n, label: F[i].d.o[n] })) : [];
+}
+const onTable = u => els.has("u" + u);
+
+/** uid -> highlight for the current decision ("can", "aim", or "ctr:<value>" for a Counter in hand). */
+function interactionMarks(f) {
+  const m = new Map();
+  if (!myMove()) return m;
+  const acts = actions();
+  if (ui.mode === "attack") { for (const a of acts) if (a.k === "attack" && a.c === ui.src) m.set(a.t, "aim"); return m; }
+  if (ui.mode === "don") { for (const a of acts) if (a.k === "give_don") m.set(a.t, "aim"); return m; }
+  if (f.d.kind === "counter") {
+    for (const a of acts) if (a.c !== null) {
+      const c = f.s[BOT].H.find(x => x.u === a.c);
+      m.set(a.c, a.k === "counter" && c ? "ctr:" + (c.x || C[c.i].cnt) : "can");
+    }
+    return m;
+  }
+  for (const a of acts) if (a.c !== null && a.k !== "give_don") m.set(a.c, "can");
+  return m;
+}
+
+function choose(n) {
+  if (!myMove()) return;
+  closePop();
+  hideModal();
+  ui = { mode: null, src: null };
+  dragArrow = null;
+  act(n);
+}
+
+function drawPrompt(f) {
+  const el = $("prompt"), d = f.d;
+  if (!d) {
+    const w = R.winner;
+    el.innerHTML = `<div class="who title">Game over</div><div class="q">${w === null ? "Draw" : LIVE ? (w === BOT ? "You win!" : "You lose") : esc(short(w)) + " wins"}</div>`;
     return;
   }
-  $("detail").innerHTML = `<h2>Card</h2><div class="detail">${img(art(selected.id), "big")}${cardInfo(selected.id)}</div>`;
-}
-
-// ---- live play
-function myMove() { const f = F[i]; return !!(LIVE && !R.over && i === F.length - 1 && f && f.d && f.d.pick === null && f.d.pl === ME); }
-function actions() { return F[i].d.act.map(([k, c, t], n) => ({ k, c, t, n })); }
-// An option belongs to the focused card (or to the DON!! pile, for giving DON!!).
-function isFocused(a) { return focus === "don" ? a.k === "give_don" : a.c === focus; }
-
-function clickCard(u) {
-  const acts = actions();
-  if (focus !== null && u !== focus) {
-    const hit = acts.filter(a => isFocused(a) && a.t === u);
-    if (hit.length === 1) { choose(hit[0].n); return true; }
+  if (LIVE && !myMove()) {
+    if (i < F.length - 1 && !playing) {
+      el.innerHTML = `<div class="who title">History</div><div class="q">Looking back at turn ${f.t}.</div><button class="btn primary" id="toNow">Back to the game</button>`;
+      $("toNow").onclick = () => go(F.length - 1);
+      return;
+    }
+    el.innerHTML = `<div class="who title them">Opponent's turn</div><div class="q">${playing ? "The bot is playing…" : "Waiting…"}</div>` +
+      (playing ? `<button class="btn" id="skipBot">Skip to my move ▸▸</button>` : "");
+    const sk = $("skipBot");
+    if (sk) sk.onclick = () => { stopPlayback(); go(F.length - 1); };
+    return;
   }
-  if (u === focus) { focus = null; render(); return true; }
-  const own = u === "don" ? acts.filter(a => a.k === "give_don") : acts.filter(a => a.c === u);
-  // One thing to do with this card: do it, except an attack, which always asks for its target.
-  if (own.length === 1 && u !== "don" && (own[0].t === null || own[0].k !== "attack")) { choose(own[0].n); return true; }
-  if (own.length) { focus = u; render(); return true; }
-  if (focus !== null) { focus = null; render(); }
-  return false;
+  if (!LIVE) {
+    const shown = d.o.map((o, k) => ({ o, k })).filter(({ k }) => k === d.pick || k < 6);
+    el.innerHTML = `<div class="who title ${d.pl === BOT ? "me" : "them"}">P${d.pl} · ${esc(short(d.pl))}</div><div class="q">${esc(d.q || d.kind)}</div>` +
+      `<div class="opts">${shown.map(({ o, k }) => `<div class="btn" style="${k === d.pick ? "border-color:var(--violet);background:rgba(185,140,255,.18);font-weight:700" : "opacity:.55"}">${esc(o)}</div>`).join("")}</div>`;
+    return;
+  }
+  const acts = actions(), kind = d.kind;
+  if (kind === "main") {
+    const end = acts.find(a => a.k === "end");
+    const hint = ui.mode === "attack" ? "Click a target glowing red. Esc to cancel." :
+      ui.mode === "don" ? "Click one of your cards to give it DON!!. Esc to cancel." :
+      "Drag a card from your hand onto the field to play it. Drag an attacker onto its target, or DON!! onto a card. Or click a glowing card.";
+    el.innerHTML = `<div class="who title me">Your turn</div><div class="hint">${hint}</div>` +
+      `<button class="btn primary title" id="endturn">End turn</button>${allOptions(acts)}`;
+    $("endturn").onclick = () => end && choose(end.n);
+    return wireOptions();
+  }
+  let q = d.q || kind, hint = "";
+  if (kind === "counter") {
+    const a = f.b && findCard(f, f.b[0]), t = f.b && findCard(f, f.b[1]);
+    if (a && t) {
+      q = `${C[a.i].n} (${a.p}) attacks your ${C[t.i].n} (${t.p})`;
+      hint = a.p >= t.p ? `You need +${Math.ceil((a.p - t.p + 1) / 1000) * 1000} to survive. Click a glowing card in your hand to use it.`
+        : "Your card survives as things stand.";
+    }
+  } else if (kind === "block") {
+    hint = "Click a glowing Blocker to block, or let the attack through.";
+  } else if (acts.some(a => a.c !== null && a.k !== "give_don")) {
+    hint = "Click a glowing card.";
+  }
+  if (kind === "confirm") previewNamed(q);
+  const plain = acts.filter(a => a.c === null && a.k !== "give_don");
+  const buttons = plain.map(a => `<button class="btn ${["pass", "no"].includes(a.k) ? "" : "primary"}" data-opt="${a.n}">${esc(nice(a))}</button>`).join("");
+  el.innerHTML = `<div class="who title me">Your move</div><div class="q">${esc(q)}</div>${hint ? `<div class="hint">${esc(hint)}</div>` : ""}` +
+    `<div class="opts">${buttons}</div>${allOptions(acts)}`;
+  wireOptions();
 }
+
+const nice = a => a.label && a.label !== a.k ? a.label : a.k[0].toUpperCase() + a.k.slice(1);
+
+/** Show the card a prompt names ("Put Gloriosa on the bottom of your deck?"), longest name first. */
+function previewNamed(text) {
+  let best = null;
+  for (const id in C) if (text.includes(C[id].n) && (!best || C[id].n.length > C[best].n.length)) best = id;
+  if (best) preview(best);
+}
+
+function allOptions(acts) {
+  return `<div class="more" id="allopts">All ${acts.length} options</div><div class="opts" id="optlist" hidden>` +
+    acts.map(a => `<button class="btn" data-opt="${a.n}">${esc(nice(a))}</button>`).join("") + "</div>";
+}
+function wireOptions() {
+  $("prompt").querySelectorAll("[data-opt]").forEach(b => b.onclick = () => choose(+b.dataset.opt));
+  const m = $("allopts");
+  if (m) m.onclick = () => { $("optlist").hidden = !$("optlist").hidden; };
+}
+
+/** Decisions that open in the middle of the table. */
+function maybeModal() {
+  if (!myMove()) { if (!(R.over && i === F.length - 1)) hideModal(); return; }
+  const f = F[i], d = f.d, acts = actions();
+  if (d.kind === "go_first")
+    return modal(`<h2 class="title">Who goes first?</h2><div class="q">You won the roll.</div>`, [],
+      acts.map(a => [a.k === "first" ? "Go first" : "Go second", a.n, a.k === "first"]));
+  if (d.kind === "mulligan")
+    return modal(`<h2 class="title">Your opening hand</h2><div class="q">Keep it, or shuffle it back and draw 5 new cards (once).</div>`,
+      f.s[BOT].H.map(c => ({ id: c.i })), acts.map(a => [a.k === "keep" ? "Keep" : "Redraw", a.n, a.k === "keep"]));
+  if (d.kind === "trigger") {
+    const yes = acts.find(a => a.k === "yes");
+    return modal(`<h2 class="title">Trigger!</h2><div class="q">${esc(d.q)}</div>`, yes ? [{ id: yes.ci }] : [],
+      acts.map(a => [a.k === "yes" ? "Activate Trigger" : "Add to hand", a.n, a.k === "yes"]));
+  }
+  const cardActs = acts.filter(a => a.c !== null && a.k !== "give_don");
+  if (!["main", "counter", "block"].includes(d.kind) && cardActs.length && cardActs.some(a => !onTable(a.c))) {
+    const head = d.kind === "order_cards" ? "Order the cards" : d.kind === "order" ? "Resolve which first?" : "Choose";
+    const why = resolving();
+    return modal(`<h2 class="title">${head}</h2>${why ? `<div class="q" style="color:var(--ink)">${esc(why)}</div>` : ""}<div class="q">${esc(d.q)}</div>`,
+      cardActs.map(a => ({ id: a.ci, n: a.n, label: a.label })), acts.filter(a => a.c === null).map(a => [a.label || a.k, a.n, false]));
+  }
+  hideModal();
+}
+
+/** The effect being carried out: the latest "Card: [Timing] text" log line so far. */
+function resolving() {
+  for (let k = i; k >= 0; k--)
+    for (let j = F[k].log.length - 1; j >= 0; j--) {
+      const m = F[k].log[j].replace(/^\[T\d+\] /, "");
+      if (/^[^:]+: \[/.test(m)) return m;
+      if (m.startsWith("---")) return "";
+    }
+  return "";
+}
+
+function modal(head, cards, buttons) {
+  const box = $("mbox");
+  box.innerHTML = head +
+    (cards.length ? `<div class="row">${cards.map(c => `<div class="pick ${c.n === undefined ? "off" : ""}" ${c.n !== undefined ? `data-opt="${c.n}"` : ""} data-id="${esc(c.id)}">` +
+      `<div class="im">${esc(C[c.id] ? C[c.id].n : "")}${img(art(c.id))}</div>${c.label ? `<div>${esc(c.label)}</div>` : ""}</div>`).join("")}</div>` : "") +
+    `<div class="btns">${buttons.map(([t, n, primary]) => `<button class="btn ${primary ? "primary big" : "big"}" data-opt="${n}">${esc(t)}</button>`).join("")}</div>`;
+  box.querySelectorAll("[data-opt]").forEach(b => b.onclick = () => choose(+b.dataset.opt));
+  box.querySelectorAll("[data-id]").forEach(b => b.onmouseenter = () => preview(b.dataset.id));
+  $("modal").style.display = "grid";
+}
+function hideModal() { $("modal").style.display = "none"; }
+
+// ------------------------------------------------------------------ clicking and dragging
+
+function stagePoint(e) {
+  const r = $("stage").getBoundingClientRect(), s = r.width / 1600;
+  return [(e.clientX - r.left) / s, (e.clientY - r.top) / s];
+}
+function closePop() { $("pop").style.display = "none"; }
+
+function popover(it, items) {
+  const pop = $("pop");
+  pop.innerHTML = items.map((x, k) => `<button class="btn ${x.primary ? "primary" : ""}" data-k="${k}">${esc(x.label)}</button>`).join("") +
+    `<button class="btn" data-k="x" style="opacity:.7">Cancel</button>`;
+  pop.style.display = "flex";
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  let x = it.x - w / 2, y = it.zone === "hand" ? it.y - 150 - h : it.y - H * it.s / 2 - h - 14;
+  if (y < 10) y = it.y + H * it.s / 2 + 16;
+  pop.style.left = Math.max(330, Math.min(1270 - w, x)) + "px";
+  pop.style.top = y + "px";
+  pop.querySelectorAll("[data-k]").forEach(b => b.onclick = ev => {
+    ev.stopPropagation();
+    closePop();
+    if (b.dataset.k !== "x") items[+b.dataset.k].run();
+  });
+}
+
+function clickCard(el) {
+  const it = el._it;
+  if (it.zone === "trash") return showTrash(it.p);
+  if (it.don && it.p === BOT) {
+    if (myMove() && !it.rested && actions().some(a => a.k === "give_don")) { ui = { mode: ui.mode === "don" ? null : "don", src: null }; render(false); }
+    return;
+  }
+  const u = it.c ? it.c.u : null;
+  if (u === null) return;
+  preview(it.c.i);
+  if (!myMove()) return;
+  const acts = actions(), kind = F[i].d.kind;
+  if (ui.mode === "attack") {
+    const a = acts.find(a => a.k === "attack" && a.c === ui.src && a.t === u);
+    if (a) return choose(a.n);
+    if (u !== ui.src) { ui = { mode: null, src: null }; render(false); }
+    return;
+  }
+  if (ui.mode === "don") {
+    const a = acts.find(a => a.k === "give_don" && a.t === u);
+    ui = { mode: null, src: null };
+    return a ? choose(a.n) : render(false);
+  }
+  const own = acts.filter(a => a.c === u);
+  const items = [];
+  if (kind === "main") {
+    const cost = it.c.c ?? C[it.c.i].cost;
+    for (const a of own.filter(a => a.k === "play"))
+      items.push({ label: `${C[it.c.i].cat === "Event" ? "Activate" : "Play"} ${C[it.c.i].n} · cost ${cost}`, primary: true, run: () => choose(a.n) });
+    for (const a of own.filter(a => a.k === "activate")) items.push({ label: a.label, run: () => choose(a.n) });
+    if (own.some(a => a.k === "attack")) items.push({ label: "Attack…", primary: true, run: () => { ui = { mode: "attack", src: u }; render(false); } });
+    const give = acts.find(a => a.k === "give_don" && a.t === u);
+    if (give) items.push({ label: "Give 1 DON!!", run: () => choose(give.n) });
+  } else {
+    for (const a of own) items.push({ label: a.label || a.k, primary: true, run: () => choose(a.n) });
+  }
+  if (!items.length) return;
+  if (items.length === 1 && kind !== "main" && kind !== "counter") return items[0].run();
+  popover(it, items);
+}
+
+let drag = null;
+function startDrag(e, el) {
+  const it = el._it;
+  if (!myMove() || e.button !== 0) return;
+  const acts = actions(), kind = F[i].d.kind, u = it.c ? it.c.u : null;
+  let type = null;
+  if (kind === "main" && it.zone === "hand" && acts.some(a => a.k === "play" && a.c === u)) type = "play";
+  else if (kind === "main" && u !== null && it.zone !== "hand" && acts.some(a => a.k === "attack" && a.c === u)) type = "attack";
+  else if (kind === "main" && it.don && it.p === BOT && !it.rested && acts.some(a => a.k === "give_don")) type = "don";
+  if (type) drag = { type, el, it, u, start: stagePoint(e), moved: false };
+}
+
+function onMove(e) {
+  if (!drag) return;
+  const [x, y] = stagePoint(e);
+  if (!drag.moved && Math.hypot(x - drag.start[0], y - drag.start[1]) < 7) return;
+  if (!drag.moved) { drag.moved = true; closePop(); }
+  if (drag.type === "play") {
+    drag.el.classList.add("dragging");
+    drag.el.style.transform = `translate(${x - W / 2}px, ${y - H / 2}px) scale(1.15)`;
+    document.querySelector(`[data-zone="chars:${BOT}"]`).classList.toggle("drop", y < 830);
+    return;
+  }
+  if (!drag.marked) {
+    drag.marked = true;
+    ui = drag.type === "attack" ? { mode: "attack", src: drag.u } : { mode: "don", src: null };
+    render(false);
+  }
+  dragArrow = [[drag.it.x, drag.it.y], [x, y], drag.type === "don"];
+  drawArrows();
+}
+
+function onUp(e) {
+  if (!drag) return;
+  const d = drag;
+  drag = null;
+  document.querySelectorAll(".zone.drop").forEach(z => z.classList.remove("drop"));
+  if (!d.moved) return clickCard(d.el);
+  const [x, y] = stagePoint(e);
+  dragArrow = null;
+  const acts = actions();
+  if (d.type === "play") {
+    d.el.classList.remove("dragging");
+    const a = acts.find(a => a.k === "play" && a.c === d.u);
+    return a && y < 830 ? choose(a.n) : render(false);
+  }
+  const hit = cardAt(x, y), u = hit && hit._it.c ? hit._it.c.u : null;
+  const a = d.type === "attack" ? acts.find(a => a.k === "attack" && a.c === d.u && a.t === u) : acts.find(a => a.k === "give_don" && a.t === u);
+  ui = { mode: null, src: null };
+  return a ? choose(a.n) : render(false);
+}
+
+function cardAt(x, y) {
+  let best = null;
+  for (const el of els.values()) {
+    const it = el._it;
+    if (!it.c || it.zone === "hand") continue;
+    const w = (it.c.r ? H : W) * it.s / 2 + 8, h = (it.c.r ? W : H) * it.s / 2 + 8;
+    if (Math.abs(x - it.x) <= w && Math.abs(y - it.y) <= h) best = el;
+  }
+  return best;
+}
+
+// ------------------------------------------------------------------ card preview
+
+function preview(id) {
+  if (!id || !C[id]) return;
+  const d = C[id], src = art(id);
+  $("pvImg").innerHTML = src ? img(src) : `<div style="padding:16px;color:#222;background:#f2eee4;width:100%;height:100%;font-weight:700">${esc(d.n)}</div>`;
+  const stats = [d.cat, d.col.map(c => c[0].toUpperCase() + c.slice(1)).join("/"), d.cat === "Leader" ? `Life ${d.life}` : `Cost ${d.cost}`];
+  if (d.pow) stats.push(`${d.pow} power`);
+  if (d.cnt) stats.push(`Counter +${d.cnt}`);
+  $("pvInfo").innerHTML = `<h3>${esc(d.n)}</h3><div class="meta">${esc(id)} · ${esc(stats.join(" · "))}${d.ty.length ? "<br>" + esc(d.ty.join(" / ")) : ""}</div>` +
+    (d.txt ? `<p>${esc(d.txt)}</p>` : "") + (d.trg ? `<p>${esc(d.trg)}</p>` : "") +
+    (d.un && d.un.length ? `<p class="un">Not implemented: ${esc(d.un.join(" / "))}</p>` : "");
+}
+
+function showTrash(p) {
+  const t = F[i].s[p].trash;
+  modal(`<h2 class="title">${LIVE ? (p === BOT ? "Your" : "Opponent's") : "P" + p} trash · ${t.length}</h2>`, t.slice().reverse().map(id => ({ id })), [["Close", -1, true]]);
+  $("mbox").querySelectorAll("[data-opt]").forEach(b => b.onclick = () => { hideModal(); maybeModal(); });
+}
+
+// ------------------------------------------------------------------ moving through the game
+
+function go(k, animate = true) {
+  i = Math.max(0, Math.min(F.length - 1, k));
+  ui = { mode: null, src: null };
+  closePop();
+  const turnChanged = shownFrame && shownFrame.t !== F[i].t && F[i].t > 0;
+  render(animate);
+  if (turnChanged && animate) banner(LIVE ? (F[i].tp === BOT ? "Your turn" : "Opponent's turn") : `Turn ${F[i].t}`);
+  maybeModal();
+  if (LIVE && R.over && i === F.length - 1 && !playing) gameOver();
+}
+
+function banner(text) {
+  const b = $("banner");
+  b.textContent = text;
+  b.classList.add("show");
+  clearTimeout(b._t);
+  b._t = setTimeout(() => b.classList.remove("show"), 1100);
+}
+
+function toast(lines) {
+  const text = lines.map(l => l.replace(/^\[T\d+\] /, "")).filter(l => !l.startsWith("---")).slice(-2).join(" · ");
+  if (!text) return;
+  const t = $("toast");
+  t.textContent = text;
+  t.classList.add("show");
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.remove("show"), 1600);
+}
+
+const quiet = k => F[k].log.length === 0 && !F[k].b;
+function playFrom(k, end, speed = 750) {
+  stopPlayback();
+  playing = { k, end };
+  const tick = () => {
+    if (!playing) return;
+    if (playing.k > playing.end) { playing = null; go(i, false); return; }
+    const k = playing.k++;
+    go(k);
+    if (F[k].log.length) toast(F[k].log);
+    timer = setTimeout(tick, quiet(k) ? 120 : speed);
+  };
+  tick();
+}
+function stopPlayback() { clearTimeout(timer); playing = null; }
+function togglePlay() {
+  if (playing) { stopPlayback(); drawHistory(); drawPrompt(F[i]); }
+  else if (i < F.length - 1) playFrom(i + 1, F.length - 1, LIVE ? 750 : 1000);
+}
+
+// ------------------------------------------------------------------ live play
 
 async function api(path, body) {
   const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -447,109 +867,82 @@ async function api(path, body) {
 function apply(st, watch) {
   F.splice(st.from, F.length - st.from, ...st.frames);
   Object.assign(R, { winner: st.winner, turns: st.turns, first: st.first, over: st.over });
-  header();
-  $("livebtns").hidden = false;
-  $("concede").hidden = R.over;
-  // Step through what the bot did since our last move, then stop on the new decision.
-  if (watch && F.length - 1 > st.from + 1) { go(st.from + 1); play(true); }
-  else { play(false); go(F.length - 1); }
+  $("liveBtns").hidden = false;
+  $("concede").hidden = !!R.over;
+  const first = st.from + 1;
+  if (watch && F.length - 1 > first) playFrom(first, F.length - 1);   // the bot's moves, one by one
+  else go(F.length - 1);
 }
 
-async function choose(k) {
+async function act(n) {
   if (busy) return;
-  busy = true; focus = null; render();
-  try { apply(await api("/api/act", { frame: i, option: k }), true); }
-  finally { busy = false; render(); }
+  busy = true;
+  render(false);
+  try { apply(await api("/api/act", { frame: i, option: n }), true); }
+  finally { busy = false; if (!playing) { render(false); maybeModal(); } }
 }
 
-async function startLive() {
-  $("handsLabel").hidden = true;
-  document.title = "OPTCG Play";
-  $("speed").value = "600";
-  $("keys").innerHTML = "&larr; &rarr; step back through the game &middot; End: back to now";
-  $("concede").onclick = async () => { if (confirm("Concede this game?")) apply(await api("/api/concede", {}), false); };
-  $("newgame").onclick = async () => { if (R.over || confirm("Abandon this game and start a new one?")) { await api("/api/new", {}); location.reload(); } };
-  apply(await api("/api/state?from=0"), false);
+function gameOver() {
+  const w = R.winner;
+  modal(`<h2 class="title" style="font-size:56px;color:${w === BOT ? "var(--gold)" : "#ff9a9a"}">${w === null ? "Draw" : w === BOT ? "Victory" : "Defeat"}</h2>` +
+    `<div class="q">After ${R.turns} turns. Use the timeline on the right to step back through the game.</div>`, [],
+    [["New game", -2, true], ["Review the game", -3, false]]);
+  $("mbox").querySelectorAll("[data-opt]").forEach(b => b.onclick = async () => {
+    hideModal();
+    if (+b.dataset.opt === -2) { await api("/api/new", {}); location.reload(); }
+  });
 }
 
-// Hover zoom
-const zoom = $("zoom");
-document.addEventListener("mouseover", e => {
-  const el = e.target.closest("[data-id]");
-  if (!el) { zoom.style.display = "none"; return; }
-  const id = el.dataset.id, src = art(id);
-  zoom.innerHTML = src ? img(src) : `<div class="zt detail">${cardInfo(id)}</div>`;
-  zoom.style.display = "block";
+// ------------------------------------------------------------------ start
+
+function fit() {
+  const s = Math.min(innerWidth / 1600, innerHeight / 1000);
+  $("stage").style.transform = `translate(${(innerWidth - 1600 * s) / 2}px, ${(innerHeight - 1000 * s) / 2}px) scale(${s})`;
+}
+addEventListener("resize", fit);
+
+$("cards").addEventListener("pointerdown", e => {
+  const el = e.target.closest(".card");
+  if (!el || !el._it) return;
+  startDrag(e, el);
+  if (!drag) clickCard(el);
 });
-document.addEventListener("mousemove", e => {
-  if (zoom.style.display !== "block") return;
-  const w = zoom.offsetWidth, h = zoom.offsetHeight, pad = 18;
-  let x = e.clientX + pad, y = e.clientY - h / 2;
-  if (x + w > innerWidth - 8) x = e.clientX - w - pad;
-  y = Math.max(8, Math.min(innerHeight - h - 8, y));
-  zoom.style.left = x + "px"; zoom.style.top = y + "px";
+addEventListener("pointermove", onMove);
+addEventListener("pointerup", onUp);
+$("cards").addEventListener("mouseover", e => {
+  const el = e.target.closest(".card");
+  if (!el || !el._it || el._it.back || el._it.don || el._it.donback || el._it.empty) return;
+  preview(el._it.c ? el._it.c.i : el._it.id);
 });
-document.addEventListener("mouseleave", () => zoom.style.display = "none");
-
-const quiet = k => F[k].log.length === 0 && k !== F.length - 1 && k !== 0;
-function go(k) { const n = Math.max(0, Math.min(F.length - 1, k)); if (n !== i) { showAllOpts = false; focus = null; } i = n; render(); }
-function step(dir) {
-  let k = i + dir;
-  if ($("eventsOnly").checked) while (k > 0 && k < F.length - 1 && quiet(k)) k += dir;
-  go(k);
-}
-function jumpTurn(dir) {
-  const t = F[i].t;
-  let k = i;
-  if (dir > 0) { while (k < F.length - 1 && F[k].t === t) k++; }
-  else { while (k > 0 && F[k].t === t) k--; const t2 = F[k].t; while (k > 0 && F[k - 1].t === t2) k--; }
-  go(k);
-}
-function play(on) {
-  clearInterval(timer); timer = null;
-  if (on && i < F.length - 1) timer = setInterval(() => { if (i >= F.length - 1) return play(false); step(1); }, +$("speed").value);
-  $("play").innerHTML = timer ? "&#x23F8; Pause" : "&#x25B6; Play";
-}
-
-function header() {
-  $("title").innerHTML = `${pname(0)}<span class="vs">vs</span>${pname(1)}`;
-  const started = R.first !== undefined && R.first !== null && F.some(f => f.t > 0);
-  $("meta").textContent = `seed ${R.seed}${started ? ` · P${R.first} went first` : ""}`;
-  const over = !LIVE || R.over;
-  $("result").innerHTML = !over ? `You are ${pname(ME)}`
-    : R.winner === null ? "Draw" : LIVE ? `${R.winner === ME ? "You win" : "You lose"} in ${R.turns} turns` : `${pname(R.winner)} wins in ${R.turns} turns`;
-  $("timeline").max = Math.max(0, F.length - 1);
-}
-header();
-$("timeline").oninput = e => go(+e.target.value);
-$("prev").onclick = () => step(-1);
-$("next").onclick = () => step(1);
-$("prevTurn").onclick = () => jumpTurn(-1);
-$("nextTurn").onclick = () => jumpTurn(1);
-$("play").onclick = () => play(!timer);
-$("speed").onchange = () => timer && play(true);
-$("hands").onchange = render;
-document.addEventListener("click", e => {
-  const opt = e.target.closest("[data-opt]");
-  if (opt && myMove()) return choose(+opt.dataset.opt);
-  const mine = e.target.closest("[data-u], [data-don]");
-  if (mine && myMove() && clickCard(mine.dataset.don !== undefined ? "don" : +mine.dataset.u)) return;
-  const el = e.target.closest("[data-id], [data-trash]");
-  if (!el) return;
-  selected = el.dataset.trash !== undefined ? { trash: +el.dataset.trash } : { id: el.dataset.id };
-  renderDetail();
+$("stage").addEventListener("pointerdown", e => {
+  if (!e.target.closest(".card, #pop, #side, #modal, #preview") && (ui.mode || $("pop").style.display === "flex")) {
+    ui = { mode: null, src: null };
+    closePop();
+    render(false);
+  }
 });
-document.addEventListener("keydown", e => {
-  if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT" && e.target.type !== "range" && e.target.type !== "checkbox") return;
-  if (myMove() && /^[1-9]$/.test(e.key) && +e.key <= F[i].d.o.length) { e.preventDefault(); return choose(+e.key - 1); }
-  if (e.key === "Escape" && focus !== null) { focus = null; return render(); }
-  const k = { ArrowRight: () => step(1), ArrowLeft: () => step(-1), " ": () => play(!timer), Home: () => go(0), End: () => go(F.length - 1),
-    PageDown: () => jumpTurn(1), PageUp: () => jumpTurn(-1) }[e.key];
+addEventListener("keydown", e => {
+  if (e.key === "Escape") { ui = { mode: null, src: null }; closePop(); render(false); return; }
+  if (e.target.tagName === "INPUT" && e.target.type !== "range") return;
+  const k = { ArrowLeft: () => { stopPlayback(); go(i - 1, false); }, ArrowRight: () => { stopPlayback(); go(i + 1); },
+    End: () => { stopPlayback(); go(F.length - 1); }, " ": togglePlay }[e.key];
   if (k) { e.preventDefault(); k(); }
 });
-// Fetch all the art once so stepping never shows a half-loaded board.
+$("hBack").onclick = () => { stopPlayback(); go(i - 1, false); };
+$("hFwd").onclick = () => { stopPlayback(); go(i + 1); };
+$("hPlay").onclick = togglePlay;
+$("hLive").onclick = () => { stopPlayback(); go(F.length - 1); };
+$("hBar").oninput = e => { stopPlayback(); go(+e.target.value, false); };
+$("concede").onclick = async () => { if (confirm("Concede this game?")) apply(await api("/api/concede", {}), false); };
+$("newgame").onclick = async () => { if (R.over || confirm("Abandon this game and start a new one?")) { await api("/api/new", {}); location.reload(); } };
+
+if (A && A.table) $("backdrop").style.setProperty("--table", `url('${asset(A.table)}')`);
 if (A) for (const id in A.cards) new Image().src = art(id);
-if (LIVE) startLive(); else render();
+document.title = LIVE ? "OPTCG · Play" : "OPTCG · Replay";
+fit();
+drawZones();
+if (LIVE) api("/api/state?from=0").then(st => apply(st, false));
+else go(0, false);
 </script>
 </body>
 </html>
