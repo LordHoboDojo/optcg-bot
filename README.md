@@ -94,7 +94,16 @@ used at all.
 | `optcg/nn/` | PyTorch policy network, imitation and PPO training (needs PyTorch) |
 | `optcg/replay.py` | Records a game as an HTML slideshow (`replay_viewer.html` is the page) |
 | `optcg/web.py` | Local server for playing a bot in the browser, on the replay page |
+| `engine-rs/` | The same engine in Rust, as the Python module `optcg_rs` (see its README) |
 | `tools/bench.py` | Games per second, with and without encoding |
+
+## The Rust engine
+
+`engine-rs/` is a port of the engine, compiler and scripts to Rust, built as the Python module
+`optcg_rs`. Same seed and same choices give the same game in both engines, checked decision by
+decision by `tests/test_rust_engine.py`. It runs a decision in about 4 us (Python: ~43 us) and
+copies a game in progress in about 2 us, for search. Training still uses the Python engine.
+Build it with `cd engine-rs && maturin develop --release`; details in `engine-rs/README.md`.
 
 ## Driving the engine
 

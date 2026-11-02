@@ -1,0 +1,24 @@
+[package]
+name = "optcg-rs"
+version = "0.1.0"
+edition = "2021"
+description = "ONE PIECE CARD GAME rules engine in Rust, a port of the Python engine in optcg/"
+
+[lib]
+name = "optcg_rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+regex = "1"
+smallvec = { version = "1", features = ["union", "const_generics"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+pyo3 = { version = "0.25", features = ["abi3-py310"], optional = true }
+
+[features]
+default = []
+# Built by maturin (see pyproject.toml); `cargo test` runs without Python.
+python = ["pyo3", "pyo3/extension-module"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
