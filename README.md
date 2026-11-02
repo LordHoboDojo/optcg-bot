@@ -168,9 +168,11 @@ in the project venv (`python3 -m venv .venv && .venv/bin/pip install torch`).
 ```
 
 Games run on the Rust engine when it is built (`engine-rs/`), else on the Python one; `--engine`
-picks. Both give the same games and observations, so checkpoints work with either. Imitation's
-games run about 5x faster on Rust; PPO rollouts barely change, because the network scoring one
-decision at a time takes ~0.4 ms against ~0.01 ms for the engine.
+picks. Both give the same games and observations, so checkpoints work with either. Each worker
+plays `--parallel` games at once (default 16) and scores their pending moves in one batched
+network call: one call per move costs ~0.4 ms, batched ~0.05 ms, against ~0.01 ms for the Rust
+engine itself. On one core that makes rollouts and evaluation about 3.7x faster than one Python
+game at a time; with 11 workers and 128 games an iteration, the GPU update is now the larger part.
 
 A run without `--league` is locked to one matchup (Rocks vs Linlin by default), so the bot learns
 those two decks and nothing else. `--league` instead samples every pairing of the decks whose

@@ -89,11 +89,6 @@ def _net(state, hidden):
     return net.eval()
 
 
-def _agent(spec, hidden):
-    """'greedy' / 'random', or a network's state dict."""
-    return AGENTS[spec]() if isinstance(spec, str) else NeuralAgent(_net(spec, hidden), sample=True)
-
-
 def _imitation_games(args):
     pairings, seeds, engine = args
     data = []
@@ -116,42 +111,93 @@ def _imitation_games(args):
     return data
 
 
+@torch.no_grad()
+def _decide(net, games, sample: bool, record: bool) -> None:
+    """Answer the pending decision of every game in `games` with one batched call of `net`."""
+    logits, values = net(collate([g["obs"] for g in games]))
+    if sample:
+        dist = torch.distributions.Categorical(logits=logits)  # padded options are -inf
+        acts = dist.sample()
+        logps = dist.log_prob(acts)
+    else:
+        acts = logits.argmax(-1)
+    for i, g in enumerate(games):
+        a = int(acts[i])
+        if record:
+            g["steps"].append((g["obs"], a, float(logps[i]), float(values[i])))
+        g["obs"], _, _ = g["env"].step(a)
+
+
+def _play_batched(pairings, seeds, net, sample, opponents, opp_sample, hidden, engine, parallel, record):
+    """Play the games for `seeds`, up to `parallel` at a time, against an opponent each seed
+    picks from `opponents` ('greedy', 'random' or a network's state dict). Each round, the
+    learner's pending decisions across all games go through `net` in one batched call, and each
+    network opponent's likewise; greedy and random opponents answer inside the game. One network
+    call per decision would cost ~0.4 ms; batched, ~0.05 ms.
+
+    Returns one dict per game in seed order: matchup, seat, opponent, the Env, and with
+    `record` the learner's steps as (obs, action, log prob, value)."""
+    opp_nets: dict = {}
+    queue, live, finished = list(seeds), [], []
+
+    def start(seed):
+        matchup, seat = _assign(pairings, seed)
+        k = random.Random(seed).choice(range(len(opponents)))  # the same pick as choice(opponents)
+        spec = opponents[k]
+        if not isinstance(spec, str) and k not in opp_nets:
+            opp_nets[k] = _net(spec, hidden)
+        env = Env(*_decks(matchup), opponent=AGENTS[spec]() if isinstance(spec, str) else None,
+                  seat=seat, engine=engine)
+        return {"seed": seed, "env": env, "obs": env.reset(seed), "k": k, "matchup": matchup, "seat": seat,
+                "opponent": spec if isinstance(spec, str) else "snapshot", "steps": []}
+
+    while queue or live:
+        while queue and len(live) < parallel:
+            g = start(queue.pop(0))
+            (finished if g["env"].done else live).append(g)
+        mine = [g for g in live if g["env"].to_move == g["seat"]]
+        if mine:
+            _decide(net, mine, sample, record)
+        theirs: dict = {}
+        for g in live:
+            if not g["env"].done and g["env"].to_move != g["seat"]:
+                theirs.setdefault(g["k"], []).append(g)
+        for k, games in theirs.items():
+            _decide(opp_nets[k], games, opp_sample, False)
+        finished += [g for g in live if g["env"].done]
+        live = [g for g in live if not g["env"].done]
+    return sorted(finished, key=lambda g: g["seed"])
+
+
 def _rollouts(args):
     """Play games with the learner sampling its moves; returns one episode per game."""
-    pairings, state, hidden, opponents, seeds, engine = args
-    net = _net(state, hidden)
-    episodes = []
-    for seed in seeds:
-        matchup, seat = _assign(pairings, seed)
-        opp_spec = random.Random(seed).choice(opponents)
-        env = Env(*_decks(matchup), opponent=_agent(opp_spec, hidden), seat=seat, engine=engine)
-        obs = env.reset(seed)
-        steps = []
-        while not env.done:
-            with torch.no_grad():
-                logits, value = net(collate([obs]))
-            dist = torch.distributions.Categorical(logits=logits[0])
-            a = dist.sample()
-            steps.append((obs, int(a), float(dist.log_prob(a)), float(value[0])))
-            obs, reward, _ = env.step(int(a))
-        episodes.append({"steps": steps, "reward": env.reward(), "matchup": matchup, "seat": seat,
-                         "opponent": opp_spec if isinstance(opp_spec, str) else "snapshot"})
-    return episodes
+    pairings, state, hidden, opponents, seeds, engine, parallel = args
+    games = _play_batched(pairings, seeds, _net(state, hidden), True, opponents, True, hidden, engine, parallel,
+                          record=True)
+    return [{"steps": g["steps"], "reward": g["env"].reward(), "matchup": g["matchup"], "seat": g["seat"],
+             "opponent": g["opponent"]} for g in games]
 
 
 def _eval_games(args):
-    """Returns {(matchup, deck a played): [wins, draws, games]} so a league can be broken down."""
-    pairings, a_spec, b_spec, hidden, seeds, engine = args
-    a = AGENTS[a_spec]() if isinstance(a_spec, str) else NeuralAgent(_net(a_spec, hidden))
-    b = AGENTS[b_spec]() if isinstance(b_spec, str) else NeuralAgent(_net(b_spec, hidden))
+    """Returns {(matchup, deck a played): [wins, draws, games]} so a league can be broken down.
+    Networks play their best-scored move."""
+    pairings, a_spec, b_spec, hidden, seeds, engine, parallel = args
     out: dict = {}
-    for seed in seeds:
-        matchup, seat = _assign(pairings, seed)
+    if isinstance(a_spec, str):  # no network to batch: play the games one by one
+        a, b = AGENTS[a_spec](), AGENTS[b_spec]() if isinstance(b_spec, str) else NeuralAgent(_net(b_spec, hidden))
         play = play_rust if engine == "rust" else play_game
-        g = play(_decks(matchup), (a, b) if seat == 0 else (b, a), seed=seed)
+        results = []
+        for seed in seeds:
+            matchup, seat = _assign(pairings, seed)
+            results.append((matchup, seat, play(_decks(matchup), (a, b) if seat == 0 else (b, a), seed=seed).winner))
+    else:
+        games = _play_batched(pairings, seeds, _net(a_spec, hidden), False, [b_spec], False, hidden, engine,
+                              parallel, record=False)
+        results = [(g["matchup"], g["seat"], g["env"].game.winner) for g in games]
+    for matchup, seat, winner in results:
         row = out.setdefault(matchup[seat], [0, 0, 0])
-        row[0] += g.winner == seat
-        row[1] += g.winner is None
+        row[0] += winner == seat
+        row[1] += winner is None
         row[2] += 1
     return out
 
@@ -181,11 +227,11 @@ def _pool(workers):
 
 # ---------------------------------------------------------------- commands
 
-def evaluate(pool, workers, pairings, a, b, hidden, games, engine="python", seed0=10_000):
+def evaluate(pool, workers, pairings, a, b, hidden, games, engine="python", parallel=16, seed0=10_000):
     """Share of games `a` wins against `b` (and draws), alternating seats and matchups.
     Also returns the win rate per deck `a` played, which is what a league run wants to see."""
     parts = pool.map(_eval_games,
-                     [(pairings, a, b, hidden, s, engine)
+                     [(pairings, a, b, hidden, s, engine, parallel)
                       for s in _split(list(range(seed0, seed0 + games)), workers)])
     by_deck: dict = {}
     for part in parts:
@@ -242,7 +288,7 @@ def imitate(args) -> None:
         state = _cpu_state(net)
         for vs in ("random", "greedy"):
             win, _, by_deck = evaluate(pool, args.workers, pairings, state, vs, args.hidden, args.eval_games,
-                                       args.engine)
+                                       args.engine, args.parallel)
             print(f"vs {vs}: wins {win:.1%}")
             if len(pairings) > 1:
                 _report(by_deck)
@@ -283,7 +329,8 @@ def ppo(args) -> None:
             opponents = ["greedy"] * max(1, len(snapshots)) + snapshots[-args.keep:]
             seeds = list(range(seed, seed + args.games))
             seed += args.games
-            episodes = [e for part in pool.map(_rollouts, [(pairings, state, hidden, opponents, s, args.engine)
+            episodes = [e for part in pool.map(_rollouts, [(pairings, state, hidden, opponents, s, args.engine,
+                                                            args.parallel)
                                                            for s in _split(seeds, args.workers)]) for e in part]
             t_play = time.time() - t
 
@@ -333,7 +380,7 @@ def ppo(args) -> None:
                 snapshots.append(_cpu_state(net))
             if it % args.eval_every == 0 or it == args.iters:
                 win, draw, by_deck = evaluate(pool, args.workers, pairings, _cpu_state(net), "greedy",
-                                              hidden, args.eval_games, args.engine)
+                                              hidden, args.eval_games, args.engine, args.parallel)
                 print(f"  eval vs greedy (best move, {args.eval_games} games): wins {win:.1%}, draws {draw:.1%}",
                       flush=True)
                 if len(pairings) > 1:
@@ -347,7 +394,7 @@ def eval_cmd(args) -> None:
     vs = args.vs if args.vs in AGENTS else load(args.vs).state_dict()
     with _pool(args.workers) as pool:
         win, draw, by_deck = evaluate(pool, args.workers, pairings, net.state_dict(), vs, net.hidden, args.games,
-                                      args.engine)
+                                      args.engine, args.parallel)
     print(f"{args.checkpoint} vs {args.vs}: wins {win:.1%}, draws {draw:.1%} over {args.games} games")
     if len(pairings) > 1:
         _report(by_deck)
@@ -366,6 +413,8 @@ def main(argv=None) -> None:
         p.add_argument("--device", default="auto", help="where learning runs: auto, cpu, mps or cuda")
         p.add_argument("--engine", default="auto", choices=("auto", "python", "rust"),
                        help="rules engine for the games: auto uses Rust (optcg_rs) when it is built")
+        p.add_argument("--parallel", type=int, default=16,
+                       help="games each worker plays at once, so the network scores their moves in one batch")
 
     p = sub.add_parser("imitate")
     common(p)

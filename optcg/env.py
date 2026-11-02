@@ -179,9 +179,12 @@ def play_rust(decks: tuple[Deck, Deck], agents: tuple[Agent, Agent], seed: Optio
 
 
 class Env:
-    """The learner plays `seat`; `opponent` answers the other seat's decisions inside step()."""
+    """The learner plays `seat`; `opponent` answers the other seat's decisions inside step().
 
-    def __init__(self, deck0: Deck, deck1: Deck, opponent: Agent, seat: int = 0, max_steps: int = 20_000,
+    With opponent=None the caller answers both seats: step() then stops at every decision, and
+    `to_move` says whose it is (for batching several games' network calls together)."""
+
+    def __init__(self, deck0: Deck, deck1: Deck, opponent: Optional[Agent], seat: int = 0, max_steps: int = 20_000,
                  engine: str = "python"):
         if engine not in ("python", "rust"):
             raise ValueError(f"unknown engine {engine!r}")
@@ -195,6 +198,11 @@ class Env:
     @property
     def done(self) -> bool:
         return self.game is None or self.game.over or self.truncated
+
+    @property
+    def to_move(self) -> int:
+        """The player who must answer the pending decision."""
+        return self.game.pending_player() if self.rust else self.game.pending.player
 
     @property
     def decision(self) -> Decision:
@@ -212,7 +220,8 @@ class Env:
         return None if self.done else self._obs()
 
     def step(self, option: int) -> tuple[Optional[dict], float, bool]:
-        """Answer the current decision with option number `option`; returns (obs, reward, done)."""
+        """Answer the current decision with option number `option`; returns (obs, reward, done).
+        `obs` is for whoever decides next: the learner, or with opponent=None either seat."""
         if self.done:
             raise RuntimeError("the game is over; call reset()")
         self.game.step(option if self.rust else self.game.pending.options[option])
@@ -234,6 +243,8 @@ class Env:
         while not g.over:
             if self.steps >= self.max_steps:
                 self.truncated = True
+                return
+            if self.opponent is None:
                 return
             if self.rust:
                 if g.pending_player() == self.seat:

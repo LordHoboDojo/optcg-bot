@@ -48,5 +48,44 @@ class Matchups(unittest.TestCase):
         self.assertEqual(_assign(pairs, 41), _assign(pairs, 41))
 
 
+@unittest.skipIf(torch is None, "PyTorch not installed")
+class BatchedPlay(unittest.TestCase):
+    """Several games per worker, with the network's moves scored in one batch."""
+
+    def setUp(self):
+        from optcg.env import rust_available
+        from optcg.nn.model import PolicyNet
+        torch.manual_seed(0)
+        self.net = PolicyNet(hidden=32).eval()
+        self.state = self.net.state_dict()
+        self.engine = "rust" if rust_available() else "python"
+        self.pairs = (("(Blue) Rocks.D.Xebec", "(Yellow) Charlotte Linlin"),)
+
+    def test_batched_eval_matches_one_at_a_time(self):
+        """Best-move play is deterministic, so batching must not change a single result."""
+        from optcg.nn.train import _eval_games
+        seeds = list(range(12))
+        for opponent in ("greedy", self.state):
+            one = _eval_games((self.pairs, self.state, opponent, 32, seeds, self.engine, 1))
+            many = _eval_games((self.pairs, self.state, opponent, 32, seeds, self.engine, 8))
+            self.assertEqual(one, many)
+
+    def test_rollouts_record_every_learner_decision(self):
+        from optcg.nn.model import collate
+        from optcg.nn.train import _rollouts
+        seeds = list(range(6))
+        eps = _rollouts((self.pairs, self.state, 32, ["greedy", self.state], seeds, self.engine, 4))
+        self.assertEqual(len(eps), len(seeds))
+        for e in eps:
+            self.assertIn(e["reward"], (-1.0, 0.0, 1.0))
+            obs = [s[0] for s in e["steps"]]
+            self.assertTrue(all(0 <= a < len(o["options"]) for o, a, _, _ in e["steps"]))
+            with torch.no_grad():
+                logits, values = self.net(collate(obs))
+            lp = torch.distributions.Categorical(logits=logits).log_prob(torch.tensor([s[1] for s in e["steps"]]))
+            self.assertTrue(torch.allclose(lp, torch.tensor([s[2] for s in e["steps"]]), atol=1e-4))
+            self.assertTrue(torch.allclose(values, torch.tensor([s[3] for s in e["steps"]]), atol=1e-4))
+
+
 if __name__ == "__main__":
     unittest.main()
