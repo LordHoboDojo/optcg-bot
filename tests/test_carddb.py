@@ -70,6 +70,18 @@ class RealCards(unittest.TestCase):
         with self.assertRaises(DeckError):
             parse_decklist("4xOP01-016", cards)  # no Leader
 
+    def test_decklist_with_card_names(self):
+        """Lists copied from deck builders put the name after the id."""
+        deck = parse_decklist("1 OP17-039 Rocks.D.Xebec\n4 OP17-042 Kaido\n2 EB05-028 Boa Hancock", load_cards())
+        self.assertEqual(deck.leader.id, "OP17-039")
+        self.assertEqual(sorted(d.id for d in deck.cards), ["EB05-028"] * 2 + ["OP17-042"] * 4)
+
+    def test_own_decks_by_name(self):
+        from optcg.play import resolve_deck
+        deck = resolve_deck("rocks")  # decks/rocks.txt
+        self.assertEqual((deck.leader.id, len(deck.cards)), ("OP17-039", 50))
+        self.assertEqual(deck.problems(), [])
+
     def test_coverage_counts(self):
         done, total, missing = coverage(official_decks()["(Red) Roronoa Zoro"])
         self.assertLessEqual(done, total)

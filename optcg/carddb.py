@@ -57,7 +57,7 @@ def deck_from_counts(leader_id: str, counts: dict[str, int], cards: dict[str, Ca
 
 
 def parse_decklist(text: str, cards: dict[str, CardDef] | None = None) -> Deck:
-    """Parse lines like '4xOP01-016', '4 OP01-016', or 'OP01-016 x4'. The Leader is the
+    """Parse lines like '4xOP01-016', '4 OP01-016 Kaido', or 'OP01-016 x4'. The Leader is the
     one Leader card in the list."""
     cards = cards or load_cards()
     counts: dict[str, int] = {}
@@ -65,7 +65,8 @@ def parse_decklist(text: str, cards: dict[str, CardDef] | None = None) -> Deck:
         line = line.split("#")[0].strip()
         if not line:
             continue
-        m = re.fullmatch(r"(\d+)\s*x?\s*([A-Z0-9]+-\d{3})\S*", line) or \
+        # a card name may follow the id ("4 OP08-051 Buckin"), as in lists copied from deck builders
+        m = re.fullmatch(r"(\d+)\s*x?\s*([A-Z0-9]+-\d{3})\S*(?:\s+\D.*)?", line) or \
             re.fullmatch(r"([A-Z0-9]+-\d{3})\S*\s*x?\s*(\d+)", line)
         if not m:
             raise DeckError(f"can't read decklist line: {line!r}")

@@ -7,8 +7,9 @@
     python -m optcg.play --missing "(Red) Roronoa Zoro"
     python -m optcg.play --deck0 "(Blue) Rocks.D.Xebec" --deck1 "(Yellow) Charlotte Linlin" --human 0 --p1 runs/ppo/latest.pt
 
-A deck is an official recommended deck name (or a unique part of one), a decklist
-file ('4xOP01-016' per line), or sample-red / sample-green.
+A deck is a list of your own in decks/ (e.g. "rocks" for decks/rocks.txt), a decklist file
+('4xOP01-016' or '4 OP01-016 Name' per line), an official recommended deck name (or a unique
+part of one), or sample-red / sample-green.
 A bot is random, greedy, or a trained network checkpoint (.pt, needs PyTorch).
 """
 from __future__ import annotations
@@ -64,14 +65,18 @@ def make_agent(spec: str) -> Agent:
     raise SystemExit(f"unknown bot {spec!r}: use {', '.join(AGENTS)} or a .pt checkpoint")
 
 
+DECK_DIR = Path(__file__).resolve().parent.parent / "decks"  # your own lists: decks/<name>.txt
+
+
 def resolve_deck(spec: str) -> Deck:
     if spec in SAMPLE_DECKS:
         return SAMPLE_DECKS[spec]
     from .carddb import find_deck, parse_decklist
-    if Path(spec).is_file():
-        deck = parse_decklist(Path(spec).read_text())
-        deck.validate()
-        return deck
+    for path in (Path(spec), DECK_DIR / f"{spec}.txt"):
+        if path.is_file():
+            deck = parse_decklist(path.read_text())
+            deck.validate()
+            return deck
     return find_deck(spec)
 
 

@@ -156,7 +156,7 @@ def page(data: dict) -> str:
 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--deck0", default="(Blue) Rocks.D.Xebec")
+    ap.add_argument("--deck0", default="rocks", help="default: your list in decks/rocks.txt")
     ap.add_argument("--deck1", default="(Yellow) Charlotte Linlin")
     ap.add_argument("--p0", default="greedy", help="random, greedy or a .pt checkpoint")
     ap.add_argument("--p1", default="greedy", help="random, greedy or a .pt checkpoint")
