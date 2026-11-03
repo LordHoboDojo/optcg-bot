@@ -15,8 +15,9 @@ ppo      self-play actor-critic (PPO): the bot plays games against its own earli
     .venv/bin/python -m optcg.nn.train ppo --init runs/ppo/latest.pt --reference runs/ppo/latest.pt --out runs/selfplay
 eval     win rate of a checkpoint against an agent (or another checkpoint), both seats
 
---league replaces the single matchup with every pairing of the decks whose effect text is fully
-implemented, sampled per game, so one bot learns them all and far more cards see real play:
+--league replaces the single matchup with every pairing of the official decks whose effect text the
+engine fully implements (on the Rust engine, all of them), sampled per game, so one bot learns them
+all and far more cards see real play:
 
     .venv/bin/python -m optcg.nn.train imitate --league --out runs/league_imitate.pt
     .venv/bin/python -m optcg.nn.train ppo --league --init runs/league_imitate.pt --out runs/league
@@ -47,17 +48,22 @@ from .model import NeuralAgent, PolicyNet, collate, load, save
 DECKS = ("rocks", "(Yellow) Charlotte Linlin")
 
 
-def covered_decks() -> tuple[str, ...]:
-    """Official decks the engine carries out in full. Anything less would train on missing effects."""
+def covered_decks(engine: str | None = None) -> tuple[str, ...]:
+    """Official decks the engine ("rust" or "python"; default: Rust when it is built) carries out in
+    full. Anything less would train on missing effects. Rust implements every card."""
     from ..carddb import coverage, official_decks
-    return tuple(sorted(n for n, d in official_decks().items() if coverage(d)[0] == coverage(d)[1]))
+    from ..env import rust_unimplemented
+    engine = engine or ("rust" if rust_available() else "python")
+    unimplemented = rust_unimplemented if engine == "rust" else None
+    return tuple(sorted(n for n, d in official_decks().items()
+                        if (c := coverage(d, unimplemented))[0] == c[1]))
 
 
 def matchups(args) -> tuple[tuple[str, str], ...]:
     """The deck pairings to train on: one matchup, or every pairing with --league."""
     if not getattr(args, "league", False):
         return ((args.deck0, args.deck1),)
-    names = covered_decks()
+    names = covered_decks(getattr(args, "engine", None))
     if len(names) < 2:
         raise SystemExit(f"--league needs 2 or more fully implemented decks, found {len(names)}")
     return tuple(itertools.combinations(names, 2))  # each seat is covered by alternating seats

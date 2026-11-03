@@ -16,14 +16,15 @@ python3 -m unittest discover tests                           # rule tests (.venv
 `optcg.replay` records a game and writes it as one HTML file you open in a browser. It plays
 back on the same table as live games (see below), one step per decision, with both hands face
 up and the option each player chose highlighted. Space plays, the arrow keys step, and the
-timeline on the right jumps anywhere; click a trash pile to see everything in it.
+timeline on the right jumps anywhere; click a trash pile to see everything in it. Games run on
+the Rust engine (build it first, see `engine-rs/README.md`), so every card plays.
 
 Card art comes from `StreamingAssets/Cards/<set>/<id>.png|jpg`. The page links to it by relative
 path instead of embedding it, so a replay shows art only while it sits where it can reach that
 folder (anywhere inside this project works). Without it the viewer draws plain text cards.
 
 ```bash
-python3 -m optcg.replay --p0 greedy --p1 greedy --seed 3 --open
+.venv/bin/python -m optcg.replay --p0 greedy --p1 greedy --seed 3 --open
 .venv/bin/python -m optcg.replay --p0 runs/ppo/latest.pt --p1 greedy --seed 3 --out replays/net.html --open
 ```
 
@@ -31,8 +32,8 @@ Decks default to Rocks vs Linlin (`--deck0`, `--deck1` change them). Replays go 
 
 ## Playing in your browser
 
-`optcg.web` runs a game on your machine and shows it on the same board as the replays, with
-you in one seat and a bot in the other:
+`optcg.web` runs a game on the Rust engine on your machine and shows it on the same board as the
+replays, with you in one seat and a bot in the other:
 
 ```bash
 .venv/bin/python -m optcg.web --open
@@ -65,9 +66,9 @@ To refresh them after a new set comes out:
 
 ```bash
 python3 tools/fetch_cards.py
-python3 -m optcg.play --list-decks                       # decks, by share of effect text implemented
+.venv/bin/python -m optcg.play --list-decks             # decks, by share of effect text implemented
 python3 -m optcg.play --deck0 "(Red) Roronoa Zoro" --deck1 "Boa Hancock" --p1 greedy --games 200
-python3 -m optcg.play --missing "(Red) Roronoa Zoro"     # what that deck's cards can't do yet
+.venv/bin/python -m optcg.play --missing "(Red) Roronoa Zoro"  # what that deck's cards can't do yet
 python3 -m optcg.play --deck0 mydeck.txt --games 1 --log # decklist file: one '4xOP01-016' per line
 ```
 
@@ -83,11 +84,17 @@ reads the lines the first can't, as general pieces (which cards, what happens to
 long, under what condition), and `engine-rs/src/scripts2.rs` holds the few one-offs, so the Rust
 engine implements every card (2,850), against Python's 1,450 cards (1,557 effect lines missing).
 Seven card texts in the data lack their attribute name (OP03-032, OP04-042, OP06-026, ST32-001/003/
-004/005, all swordsmen); the Rust engine reads them as <Slash>. Training, search and Rust games get
-all of it; the Python engine, and the tools still built on it (`--list-decks`, `--missing`, the
-browser game and replays), only know the cards Python implements. See `engine-rs/README.md`.
+004/005, all swordsmen); the Rust engine reads them as <Slash>. See `engine-rs/README.md`.
 
-A line the engine can't do is skipped and listed in `CardDef.unimplemented`. Such a card still
+The tools follow the Rust engine once it is built: `--list-decks` and `--missing` report its
+coverage (every official deck at 100%), `--league` trains on every official deck, and the browser
+game and replays run on it. The Python engine stays as the reference the Rust one is tested
+against, and still runs `optcg.play` games and `--human` in the terminal, where cards it doesn't
+implement play with their stats and keywords only. The made-up sample decks (`sample-red`,
+`sample-green`) exist only in the Python engine.
+
+A line the Python engine can't do is skipped and listed in `CardDef.unimplemented` (the Rust
+engine's list is `optcg_rs.Db.unimplemented(card_id)`, empty for every card). Such a card still
 plays with its stats and keywords. An Event whose [Main]/[Counter] text isn't implemented can't be
 used at all.
 
@@ -193,9 +200,9 @@ engine itself. On one core that makes rollouts and evaluation about 3.7x faster 
 game at a time; with 11 workers and 128 games an iteration, the GPU update is now the larger part.
 
 A run without `--league` is locked to one matchup (your Rocks list, `decks/rocks.txt`, vs Linlin by default), so the bot learns
-those two decks and nothing else. `--league` instead samples every pairing of the decks whose
-effect text is fully implemented, with the learner on either side, so one bot learns them all and
-far more cards see real play. Evaluations then break the win rate down per deck:
+those two decks and nothing else. `--league` instead samples every pairing of the official decks
+whose effect text the engine fully implements (on the Rust engine, all 107: 5,671 matchups), with
+the learner on either side, so one bot learns them all and far more cards see real play. Evaluations then break the win rate down per deck:
 
 ```bash
 .venv/bin/python -m optcg.nn.train imitate --league --out runs/league_imitate.pt

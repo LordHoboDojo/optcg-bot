@@ -1,4 +1,4 @@
-"""Replay recording. Run with: python3 -m unittest discover tests"""
+"""Replay recording, on the Rust engine. Run with: python3 -m unittest discover tests"""
 import json
 import re
 import tempfile
@@ -6,23 +6,32 @@ import unittest
 from pathlib import Path
 
 from optcg.agents import GreedyAgent, RandomAgent
-from optcg.cardpool import GREEN_DECK, RED_DECK
+from optcg.env import rust_available
 from optcg.play import play_game
 from optcg.replay import ASSETS, art, record, to_html
+
+
+def decks():
+    """Official decks the Python engine also carries out in full, so both engines play the same game."""
+    from optcg.carddb import official_decks
+    ds = official_decks()
+    return ds["(Blue) Rocks.D.Xebec"], ds["(Yellow) Charlotte Linlin"]
 
 
 def embedded(html: str) -> dict:
     return json.loads(re.search(r"const R = (\{.*?\});\n", html, re.S).group(1).replace("<\\/", "</"))
 
 
+@unittest.skipUnless(rust_available(), "optcg_rs not built")
 class Replay(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.rep = record((RED_DECK, GREEN_DECK), (GreedyAgent(), RandomAgent(1)), seed=4, names=("greedy", "random"))
+        cls.rep = record(decks(), (GreedyAgent(), RandomAgent(1)), seed=4, names=("greedy", "random"))
 
     def test_same_game_as_play_game(self):
-        g = play_game((RED_DECK, GREEN_DECK), (GreedyAgent(), RandomAgent(1)), seed=4)
-        self.assertEqual((self.rep["winner"], self.rep["turns"]), (g.winner, g.turn_number))
+        g = play_game(decks(), (GreedyAgent(), RandomAgent(1)), seed=4)
+        self.assertEqual((self.rep["winner"], self.rep["turns"], self.rep["first"]),
+                         (g.winner, g.turn_number, g.first_player))
         self.assertEqual(len(self.rep["frames"]), len(g.history) + 1)
         self.assertEqual([l for f in self.rep["frames"] for l in f["log"]], g.log)
 
@@ -50,8 +59,17 @@ class Replay(unittest.TestCase):
             self.assertEqual(art(self.rep, Path(d)), {})
             self.assertNotIn("art", embedded(to_html(self.rep, Path(d), assets=Path(d))))
 
+    def test_cards_only_the_rust_engine_implements(self):
+        """An OP15 deck: most of its text is beyond the Python engine, none of it beyond Rust."""
+        from rust_parity import set_decks
+        ds = set_decks("OP15")
+        rep = record((ds["OP15 Enel"], ds["OP15 Brook"]), (GreedyAgent(), GreedyAgent()), seed=2)
+        self.assertNotIn("d", rep["frames"][-1])
+        self.assertTrue(all(not c["un"] for c in rep["cards"].values()))
+        self.assertTrue(any(f["s"][0]["C"] for f in rep["frames"]))
 
-@unittest.skipUnless((ASSETS / "Cards").is_dir(), "card art not installed")
+
+@unittest.skipUnless(rust_available() and (ASSETS / "Cards").is_dir(), "optcg_rs not built or card art not installed")
 class Art(unittest.TestCase):
     def test_paths_resolve_from_the_output_folder(self):
         from optcg.carddb import official_decks

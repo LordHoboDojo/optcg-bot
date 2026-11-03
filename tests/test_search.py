@@ -94,7 +94,7 @@ class Search(unittest.TestCase):
                 else:
                     g.step(g.greedy())
 
-    def test_web_game_keeps_its_rust_copy_in_step(self):
+    def test_web_game_plays_the_search_bot(self):
         from optcg.web import Session
         with tempfile.TemporaryDirectory() as d:
             path = str(Path(d) / "net.pt")
@@ -105,8 +105,9 @@ class Search(unittest.TestCase):
             for _ in range(40):
                 if s.g.over:
                     break
-                s.act(len(s.frames) - 1, random.Random(len(s.frames)).randrange(len(s.g.pending.options)))
-                self.assertEqual(s.rg.num_options(), len(s.g.pending.options) if s.g.pending else 0)
+                s.act(len(s.frames) - 1, random.Random(len(s.frames)).randrange(s.g.num_options()))
+                self.assertTrue(s.g.over or s.g.pending_player() == 0)
+            self.assertTrue(any(f["d"]["pl"] == 1 for f in s.frames if "d" in f))
 
 
 @unittest.skipUnless(rust_available(), "the Rust engine is not built (engine-rs/)")

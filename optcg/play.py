@@ -11,8 +11,9 @@ A deck is a list of your own in decks/ (e.g. "rocks" for decks/rocks.txt), a dec
 ('4xOP01-016' or '4 OP01-016 Name' per line), an official recommended deck name (or a unique
 part of one), or sample-red / sample-green.
 A bot is random, greedy, or a trained network checkpoint (.pt, needs PyTorch). mcts:<checkpoint>
-adds search on top of the network; it plays on the Rust engine, so use it in optcg.web or
-optcg.search.
+adds search on top of the network; it plays on the Rust engine, so use it in optcg.web,
+optcg.replay or optcg.search.
+--list-decks and --missing report what the Rust engine carries out (every card) when it is built.
 """
 from __future__ import annotations
 
@@ -86,21 +87,33 @@ def resolve_deck(spec: str) -> Deck:
     return find_deck(spec)
 
 
+def coverage(deck: Deck) -> tuple[int, int, list[str]]:
+    """carddb.coverage() by the Rust engine, which implements every card, when it is built;
+    else by the Python engine."""
+    from .carddb import coverage
+    from .env import rust_available, rust_unimplemented
+    return coverage(deck, rust_unimplemented if rust_available() else None)
+
+
+def _engine() -> str:
+    from .env import rust_available
+    return "Rust" if rust_available() else "Python (build engine-rs/ for every card)"
+
+
 def list_decks() -> None:
-    from .carddb import coverage, official_decks
+    from .carddb import official_decks
     rows = []
     for name, deck in official_decks().items():
         done, total, _ = coverage(deck)
         rows.append((done / max(total, 1), name))
     for pct, name in sorted(rows, reverse=True):
         print(f"{pct:4.0%}  {name}")
-    print("\n% = share of effect text in the deck the engine carries out")
+    print(f"\n% = share of effect text in the deck the {_engine()} engine carries out")
 
 
 def show_missing(spec: str) -> None:
-    from .carddb import coverage
     done, total, missing = coverage(resolve_deck(spec))
-    print(f"{done}/{total} effect lines implemented. Not implemented:")
+    print(f"{_engine()} engine: {done}/{total} effect lines implemented." + (" Not implemented:" if missing else ""))
     for line in sorted(set(missing)):
         print(f"  {missing.count(line)}x {line}")
 

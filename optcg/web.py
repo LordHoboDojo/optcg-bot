@@ -4,9 +4,10 @@
     .venv/bin/python -m optcg.web --deck0 "(Black) Monkey.D.Luffy" --deck1 "(Blue) Rocks.D.Xebec" --bot runs/league/latest.pt --open
     .venv/bin/python -m optcg.web --bot mcts:runs/rocks/latest.pt --open    # the network plus search
 
-A small local server runs the game. The page shows only what your seat may see: the bot's hand
-stays face down and, of its decisions, only the option it picked. Every step of the game is kept,
-so you can scrub back through it while you play.
+A small local server runs the game on the Rust engine (engine-rs/), which carries out every card.
+The page shows only what your seat may see: the bot's hand stays face down and, of its decisions,
+only the option it picked. Every step of the game is kept, so you can scrub back through it while
+you play.
 """
 from __future__ import annotations
 
@@ -22,9 +23,8 @@ from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 from .deck import Deck
-from .engine import Game
 from .play import MAX_STEPS, make_agent, resolve_deck
-from .replay import ASSETS, _def, _frame, art, page
+from .replay import ASSETS, _def, _frame, art, card_defs, card_ids, first_player, new_game, page, pending
 
 # Decisions whose chosen option would show a hidden card's place, e.g. the order of cards put
 # on the bottom of the deck.
@@ -38,25 +38,19 @@ class Session:
         self.decks, self.bot_spec, self.human = decks, bot, human
         self.seed = random.randrange(1 << 30) if seed is None else seed
         self.bot = make_agent(bot)
-        self.g = Game(decks, seed=self.seed)
-        # A bot that searches plays on the Rust engine: a copy of the game kept in step with
-        # this one (both engines play the same game from the same seed and answers).
-        self.rg = None
-        if getattr(self.bot, "rust_only", False):
-            from .env import rust_game
-            self.rg = rust_game(decks, self.seed)
+        self.g = new_game(decks, self.seed)  # optcg_rs.Game
+        self.defs, self.ids = card_defs(decks), card_ids(decks)
         self.frames: list[dict] = []
         self.seen = 0
         self._advance()
 
     def data(self) -> dict:
         """What the page starts from. Frames come from state()."""
-        g = self.g
-        ids = sorted({c.d.id for c in g.cards.values()})
         out = {"players": [{"leader": self.decks[p].leader.name, "id": self.decks[p].leader.id,
                             "agent": "you" if p == self.human else self.bot_spec} for p in (0, 1)],
                "seed": self.seed, "winner": None, "turns": 0, "first": None,
-               "cards": {i: _def(g, i) for i in ids}, "frames": [], "live": {"human": self.human}}
+               "cards": {i: _def(self.defs[i]) for i in sorted(self.defs)}, "frames": [],
+               "live": {"human": self.human}}
         if a := art(out):
             out["art"] = {**a, "base": "art"}
         return out
@@ -64,26 +58,18 @@ class Session:
     def state(self, since: int = 0) -> dict:
         g = self.g
         return {"from": since, "frames": self.frames[since:], "over": g.over, "winner": g.winner,
-                "turns": g.turn_number, "first": g.first_player}
+                "turns": g.turn_number, "first": first_player(self.frames)}
 
     def act(self, frame: int, option: int) -> None:
         g = self.g
         if g.over or frame != len(self.frames) - 1:
             raise ValueError("that decision has already been made")
-        d = g.pending
-        if not 0 <= option < len(d.options):
+        if not 0 <= option < g.num_options():
             raise ValueError("no such option")
-        a = d.options[option]
-        self.frames[frame]["d"].update(pick=option, hl=[u for u in (a.card, a.target) if u is not None])
-        self._step(option)
+        _, card, target, _, _ = pending(g)["options"][option]
+        self.frames[frame]["d"].update(pick=option, hl=[u for u in (card, target) if u is not None])
+        g.step(option)
         self._advance()
-
-    def _step(self, option: int) -> None:
-        self.g.step(self.g.pending.options[option])
-        if self.rg is not None:
-            self.rg.step(option)
-            if self.rg.num_options() != (len(self.g.pending.options) if self.g.pending else 0):
-                raise RuntimeError("the Rust copy of the game no longer matches")
 
     def concede(self) -> None:
         if not self.g.over:
@@ -91,8 +77,8 @@ class Session:
             self.frames.append(self._frame())
 
     def _frame(self) -> dict:
-        f = _frame(self.g, self.seen)
-        self.seen = len(self.g.log)
+        f = _frame(self.g, self.defs, self.seen)
+        self.seen = self.g.log_len
         theirs = f["s"][1 - self.human]
         theirs["H"] = [c if c.get("rv") else {} for c in theirs["H"]]  # face down unless it was shown
         return f
@@ -108,24 +94,26 @@ class Session:
             if g.over:
                 self.frames.append(self._frame())
                 return
-            d = g.pending
+            d = pending(g)
             f = self._frame()
-            base = {"pl": d.player, "kind": d.kind, "q": d.prompt}
-            if d.player == self.human:
-                cid = lambda u: None if u is None else g.cards[u].d.id  # the decider sees its option cards
-                f["d"] = {**base, "o": [str(o) for o in d.options], "pick": None, "hl": [],
-                          "act": [[o.kind, o.card, o.target, o.index, cid(o.card), cid(o.target)] for o in d.options]}
+            base = {"pl": d["player"], "kind": d["kind"], "q": d["prompt"]}
+            if d["player"] == self.human:
+                cid = lambda u: None if u is None else self.ids[u]  # the decider sees its option cards
+                f["d"] = {**base, "o": [o[4] for o in d["options"]], "pick": None, "hl": [],
+                          "act": [[k, c, t, i, cid(c), cid(t)] for k, c, t, i, _ in d["options"]]}
                 self.frames.append(f)
                 return
-            a = d.options[self.bot.pick(self.rg)] if self.rg is not None else self.bot.act(g, d)
+            k = self.bot.pick(g)
+            _, card, target, _, label = d["options"][k]
             # Only the pick is shown: the other options would give away the bot's hand.
             # Card ids (uids) are kept only for cards the person can already see.
             shown = self._visible(f)
-            f["d"] = {**base, "o": [] if d.kind in SECRET_KINDS else [str(a)], "n": len(d.options),
-                      "pick": None if d.kind in SECRET_KINDS else 0,
-                      "hl": [u for u in (a.card, a.target) if u is not None and u in shown]}
+            secret = d["kind"] in SECRET_KINDS
+            f["d"] = {**base, "o": [] if secret else [label], "n": len(d["options"]),
+                      "pick": None if secret else 0,
+                      "hl": [u for u in (card, target) if u is not None and u in shown]}
             self.frames.append(f)
-            self._step(d.options.index(a))
+            g.step(k)
         raise RuntimeError(f"game did not finish in {MAX_STEPS} steps")
 
 

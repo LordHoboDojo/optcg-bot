@@ -1,4 +1,4 @@
-"""Playing in the browser. Run with: python3 -m unittest discover tests"""
+"""Playing in the browser, on the Rust engine. Run with: python3 -m unittest discover tests"""
 import json
 import random
 import threading
@@ -6,8 +6,14 @@ import unittest
 import urllib.error
 import urllib.request
 
-from optcg.cardpool import GREEN_DECK, RED_DECK
+from optcg.env import rust_available
 from optcg.web import Server, Session
+
+
+def decks():
+    from optcg.carddb import official_decks
+    ds = official_decks()
+    return ds["(Blue) Rocks.D.Xebec"], ds["(Yellow) Charlotte Linlin"]
 
 
 def finish(s: Session, seed: int = 1) -> int:
@@ -19,10 +25,11 @@ def finish(s: Session, seed: int = 1) -> int:
     return n
 
 
+@unittest.skipUnless(rust_available(), "optcg_rs not built")
 class PlaySession(unittest.TestCase):
     def test_waits_on_the_person_and_plays_the_bot(self):
         for seat in (0, 1):
-            s = Session((RED_DECK, GREEN_DECK), "greedy", human=seat, seed=2)
+            s = Session(decks(), "greedy", human=seat, seed=2)
             d = s.frames[-1]["d"]
             self.assertEqual((d["pl"], d["pick"]), (seat, None))
             self.assertEqual(len(d["act"]), len(d["o"]))
@@ -30,7 +37,7 @@ class PlaySession(unittest.TestCase):
             self.assertNotIn("d", s.frames[-1])
 
     def test_bot_hand_and_options_stay_hidden(self):
-        s = Session((RED_DECK, GREEN_DECK), "greedy", human=0, seed=3)
+        s = Session(decks(), "greedy", human=0, seed=3)
         finish(s)
         bot = [f["d"] for f in s.frames if "d" in f and f["d"]["pl"] == 1]
         self.assertTrue(bot)
@@ -41,7 +48,7 @@ class PlaySession(unittest.TestCase):
             self.assertNotIn("act", d)
 
     def test_stale_or_bad_answers_are_refused(self):
-        s = Session((RED_DECK, GREEN_DECK), "greedy", human=0, seed=4)
+        s = Session(decks(), "greedy", human=0, seed=4)
         last = len(s.frames) - 1
         with self.assertRaises(ValueError):
             s.act(last, len(s.frames[-1]["d"]["o"]))
@@ -49,17 +56,27 @@ class PlaySession(unittest.TestCase):
         with self.assertRaises(ValueError):
             s.act(last, 0)  # already answered
 
+    def test_cards_only_the_rust_engine_implements(self):
+        from rust_parity import set_decks
+        ds = set_decks("OP11")
+        s = Session((ds["OP11 Jinbe"], ds["OP11 Charlotte Katakuri"]), "greedy", human=1, seed=7)
+        self.assertGreater(finish(s), 0)
+        self.assertNotIn("d", s.frames[-1])
+        for f in s.frames:  # the bot's hand stays hidden except for cards it showed
+            self.assertTrue(all(c == {} or c.get("rv") for c in f["s"][0]["H"]))
+
     def test_concede(self):
-        s = Session((RED_DECK, GREEN_DECK), "greedy", human=1, seed=5)
+        s = Session(decks(), "greedy", human=1, seed=5)
         s.concede()
         self.assertEqual(s.g.winner, 0)
         self.assertNotIn("d", s.frames[-1])
 
 
+@unittest.skipUnless(rust_available(), "optcg_rs not built")
 class Http(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.srv = Server(("127.0.0.1", 0), Session((RED_DECK, GREEN_DECK), "random", human=0, seed=6))
+        cls.srv = Server(("127.0.0.1", 0), Session(decks(), "random", human=0, seed=6))
         cls.url = f"http://127.0.0.1:{cls.srv.server_address[1]}"
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
 
