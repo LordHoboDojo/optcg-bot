@@ -1,0 +1,12 @@
+.git
+.idea
+.venv
+.env
+StreamingAssets
+runs
+replays
+engine-rs/target
+**/__pycache__
+*.db
+web/node_modules
+web/dist

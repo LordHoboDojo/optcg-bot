@@ -1,0 +1,1 @@
+{"root":["./src/api.ts","./src/main.tsx","./src/session.tsx","./src/components/layout.tsx","./src/components/charts.tsx","./src/pages/account.tsx","./src/pages/analysis.tsx","./src/pages/bots.tsx","./src/pages/docs.tsx","./src/pages/home.tsx","./src/pages/notfound.tsx","./src/pages/play.tsx","./src/pages/signin.tsx"],"version":"5.9.3"}

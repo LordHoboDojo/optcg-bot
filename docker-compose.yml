@@ -1,0 +1,32 @@
+# The site behind Caddy, which gets and renews the HTTPS certificate for OPTCG_DOMAIN.
+#     cp .env.example .env   # and fill it in
+#     docker compose up -d --build
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      OPTCG_SECURE_COOKIES: "1"
+    volumes:
+      - data:/data
+    restart: unless-stopped
+    # To send the logs to CloudWatch, uncomment (the instance needs an IAM role that may write logs):
+    # logging:
+    #   driver: awslogs
+    #   options:
+    #     awslogs-region: us-east-1
+    #     awslogs-group: optcg
+    #     awslogs-create-group: "true"
+  caddy:
+    image: caddy:2.8
+    ports: ["80:80", "443:443"]
+    environment:
+      OPTCG_DOMAIN: ${OPTCG_DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy:/data
+    depends_on: [app]
+    restart: unless-stopped
+volumes:
+  data:
+  caddy:

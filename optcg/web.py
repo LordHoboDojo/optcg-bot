@@ -29,13 +29,17 @@ from .replay import ASSETS, _def, _frame, art, page
 # Decisions whose chosen option would show a hidden card's place, e.g. the order of cards put
 # on the bottom of the deck.
 SECRET_KINDS = {"order", "order_cards"}
+MAX_BODY = 64 * 1024  # bytes in a request
 
 
 class Session:
     """One game between a person in seat `human` and a bot in the other seat."""
 
-    def __init__(self, decks: tuple[Deck, Deck], bot: str, human: int = 0, seed: Optional[int] = None):
+    def __init__(self, decks: tuple[Deck, Deck], bot: str, human: int = 0, seed: Optional[int] = None,
+                 name: Optional[str] = None):
         self.decks, self.bot_spec, self.human = decks, bot, human
+        self.bot_name = name or bot  # what the page calls the bot
+        self.conceded = False
         self.seed = random.randrange(1 << 30) if seed is None else seed
         self.bot = make_agent(bot)
         self.g = Game(decks, seed=self.seed)
@@ -49,16 +53,17 @@ class Session:
         self.seen = 0
         self._advance()
 
-    def data(self) -> dict:
-        """What the page starts from. Frames come from state()."""
+    def data(self, art_base: str = "art", art_files: Optional[tuple[str, ...]] = None) -> dict:
+        """What the page starts from. Frames come from state(). Art loads from `art_base`: the
+        server's /art/ folder, or a URL when it lives elsewhere (`art_files` then lists it)."""
         g = self.g
         ids = sorted({c.d.id for c in g.cards.values()})
         out = {"players": [{"leader": self.decks[p].leader.name, "id": self.decks[p].leader.id,
-                            "agent": "you" if p == self.human else self.bot_spec} for p in (0, 1)],
+                            "agent": "you" if p == self.human else self.bot_name} for p in (0, 1)],
                "seed": self.seed, "winner": None, "turns": 0, "first": None,
                "cards": {i: _def(g, i) for i in ids}, "frames": [], "live": {"human": self.human}}
-        if a := art(out):
-            out["art"] = {**a, "base": "art"}
+        if a := art(out, files=art_files):
+            out["art"] = {**a, "base": art_base}
         return out
 
     def state(self, since: int = 0) -> dict:
@@ -87,6 +92,7 @@ class Session:
 
     def concede(self) -> None:
         if not self.g.over:
+            self.conceded = True
             self.g.concede(self.human)
             self.frames.append(self._frame())
 
@@ -154,7 +160,10 @@ class Handler(BaseHTTPRequestHandler):
                 html = page(srv.session.data())
             self._send(html.encode(), "text/html; charset=utf-8")
         elif url.path == "/api/state":
-            since = int(parse_qs(url.query).get("from", ["0"])[0])
+            since = parse_qs(url.query).get("from", ["0"])[0]
+            if not since.isdigit():
+                return self._json({"error": "from must be a frame number"}, 400)
+            since = int(since)
             with srv.lock:
                 self._json(srv.session.state(since))
         elif url.path.startswith("/art/"):
@@ -168,12 +177,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         srv = self.server
-        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        try:
+            size = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(size) or b"{}") if 0 <= size <= MAX_BODY else None
+        except ValueError:
+            body = None
+        if not isinstance(body, dict) or (self.path == "/api/act" and not all(
+                type(body.get(k)) is int and body[k] >= 0 for k in ("frame", "option"))):
+            return self._json({"error": "send a JSON object; /api/act needs whole numbers frame and option"}, 400)
         with srv.lock:
             s = srv.session
             try:
                 if self.path == "/api/act":
-                    s.act(int(body["frame"]), int(body["option"]))
+                    s.act(body["frame"], body["option"])
                 elif self.path == "/api/concede":
                     s.concede()
                 elif self.path == "/api/new":
@@ -181,9 +197,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"ok": True})
                 else:
                     return self._send(b"not found", "text/plain", 404)
-            except (ValueError, KeyError) as e:
-                return self._json({"error": str(e), **s.state(int(body.get("frame", 0)))}, 409)
-            self._json(s.state(int(body.get("frame", len(s.frames) - 1))))
+            except ValueError as e:
+                return self._json({"error": str(e), **s.state(body.get("frame", 0))}, 409)
+            self._json(s.state(body.get("frame", len(s.frames) - 1)))
 
 
 class Server(ThreadingHTTPServer):

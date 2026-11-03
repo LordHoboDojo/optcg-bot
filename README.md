@@ -57,6 +57,18 @@ You only see what your seat may see: the bot's hand is face down, and of each bo
 only the option it picked. `--human 1` takes the other seat, `--seed` fixes the shuffle, and
 the page has Concede and New game buttons.
 
+## Hosting it
+
+`optcg.server` is the same table as a website: each visitor plays a house bot in their own game,
+signing in with Google is optional, and signed-in people can register bots that play the house
+bots over a WebSocket API. See `docs/hosting.md` (Docker, Caddy, AWS) and `docs/bot-api.md`.
+
+```bash
+.venv/bin/pip install -r requirements-server.txt
+OPTCG_DEV_LOGIN=1 .venv/bin/python -m optcg.server                 # http://127.0.0.1:8000
+OPTCG_KEY=optcg_... .venv/bin/python tools/bot_client.py -v         # an example remote bot
+```
+
 ## Real cards
 
 `data/cards.json` holds every English card (2,850) and `data/decks.json` the official
