@@ -14,6 +14,10 @@ cd engine-rs
 env -u CONDA_PREFIX VIRTUAL_ENV=../.venv ../.venv/bin/maturin develop --release
 cargo test --release                      # Rust tests (no Python needed)
 cargo run --release --example bench       # speed
+cargo run --release --example coverage    # card text not implemented (-- --list: each line, and the part not read)
+cargo run --release --example dump        # how the second compiler read each line (-- OP05: one set)
+cargo run --release --example fuzz        # random games with random decks of implemented cards
+cargo run --release --example try -- "Draw 1 card."   # which parts of a sentence the second compiler reads
 ```
 
 ## Using it from Python
@@ -56,8 +60,31 @@ filters and costs (`effects.rs`) that the engine interprets. Scripts are plain f
 
 Most of the remaining time is copying the state at segment boundaries and recomputing statics.
 
+## Two compilers
+
+`compile.rs` is the port of `optcg/effect_text.py` and reads exactly the lines Python reads, in the
+same way. A line it can't read goes to `compile2.rs`, which exists only here. Instead of one
+pattern per wording, it reads a sentence as parts (`gen.rs`):
+
+- which cards: `up to 1 of your opponent's rested Characters with a cost of 4 or less`, `your
+  {Navy} type Leader`, `2 cards from your trash`, `it` (the last cards chosen)
+- what happens to them: K.O., rest, return to hand, place at the bottom of the deck, power and
+  cost changes, keywords, "cannot be rested", play, give DON!!
+- for how long, and under what condition: counts and comparisons ("you have 2 or more rested
+  Characters", "the number of your Life cards is equal to or less than ...")
+- costs paid with those same pieces, replacement effects ("If this Character would be K.O.'d,
+  you may ... instead"), permanent effects, and "When ..." triggers
+
+A handful of one-off cards are hand-written in `scripts2.rs` (Rust only; `scripts.rs` mirrors
+Python's scripts). `compile2.rs`'s `correction` fixes a few card texts that the data runs together
+or leaves a word out of. Between the two compilers and the scripts, every card in
+`data/cards.json` is implemented.
+
+`tests/general.rs` plays some of these on boards set up for them (`Game::arrange`).
+
 ## Known differences from Python
 
-None in behaviour. One Python bug is kept on purpose so the engines stay comparable: the
+The Rust engine implements card text Python doesn't (the second compiler). On cards both
+implement, games are the same decision by decision. One Python bug is kept on purpose so the engines stay comparable: the
 "Return up to N Characters with a [Trigger] to the owner's hand" template reads its Trigger
 group as empty, so the restriction never applies (`compile.rs`, `bounce`). Fix it in both.

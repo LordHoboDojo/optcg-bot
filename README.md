@@ -78,6 +78,15 @@ Every card gets its real stats, colors, types and printed keywords. Effects come
   about 54% of all effect lines (all of OP-17), and 1,313 cards are fully implemented.
 - `optcg/scripts.py` holds hand-written effects for cards the compiler can't read.
 
+New card text goes into the Rust engine only. Its second compiler (`engine-rs/src/compile2.rs`)
+reads the lines the first can't, as general pieces (which cards, what happens to them, for how
+long, under what condition), and `engine-rs/src/scripts2.rs` holds the few one-offs, so the Rust
+engine implements every card (2,850), against Python's 1,450 cards (1,557 effect lines missing).
+Seven card texts in the data lack their attribute name (OP03-032, OP04-042, OP06-026, ST32-001/003/
+004/005, all swordsmen); the Rust engine reads them as <Slash>. Training, search and Rust games get
+all of it; the Python engine, and the tools still built on it (`--list-decks`, `--missing`, the
+browser game and replays), only know the cards Python implements. See `engine-rs/README.md`.
+
 A line the engine can't do is skipped and listed in `CardDef.unimplemented`. Such a card still
 plays with its stats and keywords. An Event whose [Main]/[Counter] text isn't implemented can't be
 used at all.

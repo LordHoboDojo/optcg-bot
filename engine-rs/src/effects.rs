@@ -4,6 +4,7 @@
 
 use crate::cards::*;
 use crate::engine::{Eng, R};
+use crate::gen::{Act, Do, Pred, RepData, Side, Q};
 
 pub type BodyFn = for<'a, 'b> fn(&'b mut Eng<'a>, Uid) -> R<()>;
 pub type CondFn = for<'a, 'b> fn(&'b Eng<'a>, Uid) -> bool;
@@ -63,6 +64,8 @@ pub enum Cond {
     /// Costs paid while resolving can be paid (effect_text._wrap_costs's `payable`).
     Payable(Box<Costs>),
     Script(CondFn),
+    /// a condition from the second compiler (gen.rs)
+    Q(Box<Q>),
 }
 
 /// Card filter phrases (effect_text.parse_filter). Reads printed values.
@@ -208,12 +211,26 @@ pub enum Body {
     WithCosts { costs: Box<Costs>, ask: bool, body: Box<Body> },
     T(Tpl),
     Script(BodyFn),
+    // from the second compiler (gen.rs)
+    Act(Box<Act>),
+    Do(Do),
+    /// pay these (the effect's costs paid while resolving), asking first if `ask`, then the body
+    Pay { costs: Vec<Act>, ask: bool, body: Box<Body> },
+    /// the second part happens only if the first did something ("You may ... If you do, ...")
+    IfDid(Box<Body>, Box<Body>),
+    /// "Your opponent may ...": they decide
+    OppMay(Box<Body>),
+    /// "Your opponent may X. If they do not, Y."
+    OppMayElse(Box<Body>, Box<Body>),
+    Nothing,
 }
 
 #[derive(Clone)]
 pub enum Target {
     SelfCard,
     AllYourCharacters { types: Option<String>, min_cost: Option<i32> },
+    /// cards on the field that fit (gen.rs)
+    Sel { side: Side, pred: Pred },
 }
 
 #[derive(Clone)]
@@ -254,6 +271,38 @@ pub struct Statics {
     pub attack_lock: Option<CondFn>,
     pub replacements: Vec<Replacement>,
     pub damage_replacements: Vec<DamageReplacement>,
+    /// compiled replacement effects: (what, text, [Once Per Turn])
+    pub gen_replacements: Vec<(RepData, String, bool)>,
+    /// power that depends on the game ("+1000 for every 2 Events in your trash")
+    pub gen_power: Vec<(Cond, crate::gen::Num, Target)>,
+    /// "base power becomes the same as your Leader's base power"
+    pub gen_base_power: Vec<(Cond, crate::gen::Num, Target)>,
+    /// "cannot be K.O.'d in battle by <Slash> attribute cards": (condition, who, the other card in the battle)
+    pub no_ko_battle_by: Vec<(Cond, Target, Pred)>,
+    /// "The cost of playing {X} type Character cards ... from your hand will be reduced by 1"
+    pub hand_discount: Vec<(Cond, Pred, i32)>,
+    /// deck-out rules on a Leader: lose only at the end of the turn / win instead of losing
+    pub deck_out_at_end: bool,
+    pub deck_out_wins: bool,
+    pub don_deck_size: Option<u32>,
+    /// "+2 cost for every 5 cards in your trash"
+    pub gen_cost: Vec<(Cond, crate::gen::Num, Target)>,
+    /// Counter values for your cards in hand that fit
+    pub gen_counter: Vec<(Cond, Pred, i32)>,
+    /// "cannot be K.O.'d by effects of <cards that fit>"
+    pub no_ko_effect_by: Vec<(Cond, Target, Pred)>,
+    /// Leader rules: Characters are played rested; 1 DON!! of the DON!! Phase goes to the Leader;
+    /// face-up Life cards go to the bottom of the deck instead of the hand; your [On Play] are negated
+    pub play_rested: bool,
+    pub don_phase_to_leader: bool,
+    pub faceup_life_to_deck: bool,
+    pub no_own_on_play: bool,
+    /// this card in hand can't be played by effects
+    pub no_effect_play: bool,
+    /// "If this Character would be rested by your opponent's Character's effect, you may rest 1 of your other Characters instead"
+    pub rest_swap: bool,
+    /// "Your Leader and all of your Characters that do not have a type including X have their effects negated"
+    pub negate_own_except: Option<String>,
 }
 
 fn until_of(dur: &str) -> Until {
@@ -280,10 +329,10 @@ impl<'a> Eng<'a> {
         let leader = || self.leader_of(src);
         match c {
             Cond::All(v) => v.iter().all(|x| self.eval(x, src)),
-            Cond::LeaderIsOrHasType(n, t) => self.name(leader()) == n || self.d(leader()).has_type(t),
+            Cond::LeaderIsOrHasType(n, t) => self.d(leader()).named(n) || self.d(leader()).has_type(t),
             Cond::LeaderHasType(t) => self.d(leader()).has_type(t),
             Cond::LeaderTypeIncludes(t) => self.d(leader()).type_includes(t),
-            Cond::LeaderIs(n) => self.name(leader()) == n,
+            Cond::LeaderIs(n) => self.d(leader()).named(n),
             Cond::OppLeaderPowerAtLeast(n) => self.power(self.ps(1 - me).leader) >= *n,
             Cond::OppLife(n, d) => d.ok(self.ps(1 - me).life.len() as i32, *n),
             Cond::MyLife(n, d) => d.ok(self.ps(me).life.len() as i32, *n),
@@ -294,7 +343,7 @@ impl<'a> Eng<'a> {
             }
             Cond::MyCharCostAtLeast(n) => self.characters(me).into_iter().any(|c| self.cost(c) >= *n),
             Cond::OppCharPowerAtLeast(n) => self.characters(1 - me).into_iter().any(|c| self.power(c) >= *n),
-            Cond::NoOther(n) => !self.characters(me).into_iter().any(|c| c != src && self.name(c) == n),
+            Cond::NoOther(n) => !self.characters(me).into_iter().any(|c| c != src && self.d(c).named(n)),
             Cond::CharsWithBasePower(k, p) => {
                 self.characters(me).into_iter().filter(|&c| self.base_power(c) >= *p).count() >= *k
             }
@@ -324,6 +373,7 @@ impl<'a> Eng<'a> {
             }
             Cond::Payable(costs) => self.payable(costs, src),
             Cond::Script(f) => f(self, src),
+            Cond::Q(q) => self.q(q, src),
         }
     }
 
@@ -331,7 +381,7 @@ impl<'a> Eng<'a> {
         let d = self.d(u);
         match f {
             Filter::Names { names, cost } => {
-                names.iter().any(|n| *n == d.name) && cost.map_or(true, |(n, dir)| dir.ok(d.cost, n))
+                names.iter().any(|n| d.named(n)) && cost.map_or(true, |(n, dir)| dir.ok(d.cost, n))
             }
             Filter::Either { left, right, excl } => {
                 (self.filter_ok(left, u) || self.filter_ok(right, u)) && excl.as_ref().map_or(true, |x| d.name != *x)
@@ -374,7 +424,7 @@ impl<'a> Eng<'a> {
                     }
                 }
                 if let Some(x) = excl {
-                    if d.name == *x {
+                    if d.named(x) {
                         return false;
                     }
                 }
@@ -414,11 +464,11 @@ impl<'a> Eng<'a> {
                 if !part.types.is_empty() && !part.types.iter().any(|t| d.has_type(t)) {
                     continue;
                 }
-                if part.name.as_ref().map_or(false, |n| *n != d.name) {
+                if part.name.as_ref().map_or(false, |n| !d.named(n)) {
                     continue;
                 }
                 if let Some(o) = &part.orname {
-                    if !(d.category == Category::Character || d.name == *o) {
+                    if !(d.category == Category::Character || d.named(o)) {
                         continue;
                     }
                 }
@@ -447,7 +497,7 @@ impl<'a> Eng<'a> {
 
     // ------------------------------------------------------------ permanent effects
 
-    fn target_ok(&self, t: &Target, src: Uid, card: Uid) -> bool {
+    pub(crate) fn target_ok(&self, t: &Target, src: Uid, card: Uid) -> bool {
         match t {
             Target::SelfCard => card == src,
             Target::AllYourCharacters { types, min_cost } => {
@@ -455,6 +505,16 @@ impl<'a> Eng<'a> {
                     && self.c(card).zone == Some(Zone::Character)
                     && types.as_ref().map_or(true, |t| self.d(card).has_type(t))
                     && min_cost.map_or(true, |m| self.cost(card) >= m)
+            }
+            Target::Sel { side, pred } => {
+                let me = self.owner(src);
+                let side_ok = match side {
+                    Side::Me => self.owner(card) == me,
+                    Side::Opp => self.owner(card) != me,
+                    Side::Both => true,
+                };
+                let zone_ok = matches!(self.c(card).zone, Some(Zone::Character) | Some(Zone::Leader) | Some(Zone::Stage));
+                side_ok && zone_ok && self.pred_ok(pred, card, src)
             }
         }
     }
@@ -471,11 +531,25 @@ impl<'a> Eng<'a> {
     }
 
     pub fn static_power(&self, src: Uid, card: Uid) -> i32 {
-        self.d(src).st.power.as_ref().map_or(0, |s| self.static_num(s, src, card))
+        let st = &self.d(src).st;
+        let mut v = st.power.as_ref().map_or(0, |s| self.static_num(s, src, card));
+        for (cond, n, to) in &st.gen_power {
+            if self.target_ok(to, src, card) && self.eval(cond, src) {
+                v += self.num(n, src);
+            }
+        }
+        v
     }
 
     pub fn static_cost(&self, src: Uid, card: Uid) -> i32 {
-        self.d(src).st.cost.as_ref().map_or(0, |s| self.static_num(s, src, card))
+        let st = &self.d(src).st;
+        let mut v = st.cost.as_ref().map_or(0, |s| self.static_num(s, src, card));
+        for (cond, n, to) in &st.gen_cost {
+            if self.target_ok(to, src, card) && self.eval(cond, src) {
+                v += self.num(n, src);
+            }
+        }
+        v
     }
 
     pub fn static_keyword(&self, src: Uid, card: Uid, kw: Kw) -> bool {
@@ -560,9 +634,11 @@ impl<'a> Eng<'a> {
         }
         if let Some((n, f)) = &k.trash {
             let cands = self.ps(me).hand.iter().copied().filter(|&c| self.filter_ok(f, c)).collect();
-            for c in self.choose_cards(me, cands, *n, "Trash for the cost", true)? {
+            let chosen = self.choose_cards(me, cands, *n, "Trash for the cost", true)?;
+            for &c in &chosen {
                 self.mv(c, Zone::Trash);
             }
+            self.hand_trashed(me, chosen.len());
         }
         if let Some((n, f)) = &k.reveal {
             let cands = self.ps(me).hand.iter().copied().filter(|&c| self.filter_ok(f, c)).collect();
@@ -600,6 +676,8 @@ impl<'a> Eng<'a> {
             let ps = self.psm(me);
             ps.don_active -= k.return_active_don;
             ps.don_deck += k.return_active_don;
+            ps.don_just_returned = k.return_active_don;
+            self.s.don_return_by = Some(me);
             let field = self.ps(me).field();
             self.fire(Timing::DonReturned, &field);
         }
@@ -637,6 +715,8 @@ impl<'a> Eng<'a> {
             Body::If(c, inner) => {
                 if self.eval(c, src) {
                     self.run(inner, src)?;
+                } else {
+                    self.did = false;
                 }
                 Ok(())
             }
@@ -653,6 +733,8 @@ impl<'a> Eng<'a> {
             Body::Optional(inner) => {
                 if self.confirm(self.owner(src), &format!("Use {}'s effect?", self.name(src)))? {
                     self.run(inner, src)?;
+                } else {
+                    self.did = false;
                 }
                 Ok(())
             }
@@ -669,6 +751,50 @@ impl<'a> Eng<'a> {
             Body::WithCosts { costs, ask, body } => self.pay_and_run(costs, *ask, body, src),
             Body::T(t) => self.template(t, src),
             Body::Script(f) => f(self, src),
+            Body::Act(a) => self.act(a, src),
+            Body::Do(d) => self.do_(d, src),
+            Body::Pay { costs, ask, body } => {
+                if !self.acts_payable(costs, src) {
+                    return Ok(());
+                }
+                let me = self.owner(src);
+                if *ask && !self.confirm(me, &format!("Pay the cost of {}'s effect?", self.name(src)))? {
+                    self.did = false;
+                    return Ok(());
+                }
+                for a in costs {
+                    self.act(a, src)?;
+                }
+                self.did = true;
+                self.run(body, src)
+            }
+            Body::IfDid(first, then) => {
+                self.did = true;
+                self.run(first, src)?;
+                if self.did {
+                    self.run(then, src)?;
+                }
+                Ok(())
+            }
+            Body::OppMay(inner) => {
+                let o = 1 - self.owner(src);
+                if self.confirm(o, &format!("{}: do it?", self.name(src)))? {
+                    self.run(inner, src)?;
+                }
+                Ok(())
+            }
+            Body::OppMayElse(x, y) => {
+                let o = 1 - self.owner(src);
+                if self.confirm(o, &format!("{}: do it?", self.name(src)))? {
+                    self.did = true;
+                    self.run(x, src)?;
+                    if self.did {
+                        return Ok(());
+                    }
+                }
+                self.run(y, src)
+            }
+            Body::Nothing => Ok(()),
         }
     }
 
@@ -713,7 +839,7 @@ impl<'a> Eng<'a> {
             Tpl::RestLeaderOrChar { n } => {
                 let cands = self.leader_and_characters(o);
                 for c in self.choose_cards(me, cands, *n, "Rest a card", false)? {
-                    self.cm(c).rested = true;
+                    self.rest_by_effect(c, me)?;
                 }
             }
             Tpl::NoCharacterPlay => self.forbid_character_play(me),
@@ -734,12 +860,12 @@ impl<'a> Eng<'a> {
             Tpl::Rest { n, pred } => {
                 let cands = self.opp_targets(src, pred);
                 for c in self.choose_cards(me, cands, *n, "Rest a Character", false)? {
-                    self.cm(c).rested = true;
+                    self.rest_by_effect(c, me)?;
                 }
             }
             Tpl::RestAll => {
                 for c in self.characters(o) {
-                    self.cm(c).rested = true;
+                    self.rest_by_effect(c, me)?;
                 }
             }
             Tpl::CannotAttack { n, pred } => {
@@ -806,7 +932,7 @@ impl<'a> Eng<'a> {
                     if self.choose(me, DecisionKind::Select, opts, "K.O. or rest it?")?.index == Some(0) {
                         self.ko(c, Some(me), true, false)?;
                     } else {
-                        self.cm(c).rested = true;
+                        self.rest_by_effect(c, me)?;
                     }
                 }
             }
@@ -814,7 +940,7 @@ impl<'a> Eng<'a> {
                 let limit = (self.ps(0).life.len() + self.ps(1).life.len()) as i32;
                 let cands = self.characters(o).into_iter().filter(|&c| self.cost(c) <= limit).collect();
                 for c in self.choose_cards(me, cands, *n, "Rest a Character", false)? {
-                    self.cm(c).rested = true;
+                    self.rest_by_effect(c, me)?;
                 }
             }
             Tpl::KoOwn { n, who } => {
@@ -875,10 +1001,10 @@ impl<'a> Eng<'a> {
                 }
             }
             Tpl::DrawTrash { d, t } => {
-                self.draw(me, *d);
+                self.effect_draw(me, *d, me);
                 self.trash_from_hand(me, *t)?;
             }
-            Tpl::Draw { d } => self.draw(me, *d),
+            Tpl::Draw { d } => self.effect_draw(me, *d, me),
             Tpl::TrashHand { t } => {
                 self.trash_from_hand(me, *t)?;
             }
@@ -924,6 +1050,9 @@ impl<'a> Eng<'a> {
                 self.add_don(me, *n, *rested);
             }
             Tpl::SetDonActive { n } => {
+                if self.d(src).category == Category::Character && self.ps(me).no_don_active_by_char_turn == self.s.turn_number {
+                    return Ok(()); // "you cannot set DON!! cards as active using Character effects"
+                }
                 let ps = self.psm(me);
                 let k = (*n).min(ps.don_rested);
                 ps.don_rested -= k;
@@ -1044,7 +1173,7 @@ impl<'a> Eng<'a> {
                 let cands = pool
                     .into_iter()
                     .filter(|&c| {
-                        matches!(self.d(c).category, Category::Character | Category::Stage) && self.filter_ok(pred, c)
+                        matches!(self.d(c).category, Category::Character | Category::Stage) && self.filter_ok(pred, c) && !self.d(c).st.no_effect_play
                     })
                     .collect();
                 for c in self.choose_cards(me, cands, *n, "Play a card", false)? {

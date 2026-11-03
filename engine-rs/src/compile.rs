@@ -14,50 +14,50 @@ use crate::cards::*;
 use crate::effects::*;
 
 pub struct Unsupported;
-type Res<T> = Result<T, Unsupported>;
+pub(crate) type Res<T> = Result<T, Unsupported>;
 
 thread_local! {
     static CACHE: RefCell<HashMap<String, Regex>> = RefCell::new(HashMap::new());
 }
 
-fn re(pat: String) -> Regex {
+pub(crate) fn re(pat: String) -> Regex {
     CACHE.with(|c| {
         c.borrow_mut().entry(pat.clone()).or_insert_with(|| Regex::new(&pat).expect("bad pattern")).clone()
     })
 }
 
 /// `re.match`
-fn rmatch<'t>(pat: &str, text: &'t str) -> Option<Captures<'t>> {
+pub(crate) fn rmatch<'t>(pat: &str, text: &'t str) -> Option<Captures<'t>> {
     re(format!("^(?:{pat})")).captures(text)
 }
 
 /// `re.fullmatch`
-fn rfull<'t>(pat: &str, text: &'t str) -> Option<Captures<'t>> {
+pub(crate) fn rfull<'t>(pat: &str, text: &'t str) -> Option<Captures<'t>> {
     re(format!("^(?:{pat})$")).captures(text)
 }
 
-fn find_all(pat: &str, text: &str) -> Vec<String> {
+pub(crate) fn find_all(pat: &str, text: &str) -> Vec<String> {
     re(pat.to_string()).captures_iter(text).map(|c| c[1].to_string()).collect()
 }
 
 /// A named group, or None when it didn't take part or matched nothing (Python truthiness).
-fn g<'t>(c: &Captures<'t>, name: &str) -> Option<&'t str> {
+pub(crate) fn g<'t>(c: &Captures<'t>, name: &str) -> Option<&'t str> {
     c.name(name).map(|m| m.as_str()).filter(|s| !s.is_empty())
 }
 
-fn gi(c: &Captures, name: &str) -> i32 {
+pub(crate) fn gi(c: &Captures, name: &str) -> i32 {
     g(c, name).unwrap().parse().unwrap()
 }
 
-fn gu(c: &Captures, name: &str) -> usize {
+pub(crate) fn gu(c: &Captures, name: &str) -> usize {
     gi(c, name) as usize
 }
 
-fn end(c: &Captures) -> usize {
+pub(crate) fn end(c: &Captures) -> usize {
     c.get(0).unwrap().end()
 }
 
-fn cap(s: &str) -> String {
+pub(crate) fn cap(s: &str) -> String {
     let mut ch = s.chars();
     match ch.next() {
         Some(f) => f.to_uppercase().collect::<String>() + ch.as_str(),
@@ -65,7 +65,7 @@ fn cap(s: &str) -> String {
     }
 }
 
-fn circled(c: char) -> Option<u32> {
+pub(crate) fn circled(c: char) -> Option<u32> {
     "➀➁➂➃➄➅➆➇➈➉".chars().position(|x| x == c).or_else(|| "①②③④⑤⑥⑦⑧⑨⑩".chars().position(|x| x == c)).map(|i| i as u32 + 1)
 }
 
@@ -109,22 +109,58 @@ pub struct Compiled {
     pub static_keywords: Vec<(Cond, Kw, Target)>,
     pub static_cost: Vec<(Cond, i32, Target)>,
     pub hand_cost: Vec<(Cond, i32)>,
+    pub gen_replacements: Vec<(crate::gen::RepData, String, bool)>,
+    pub aliases: Vec<String>,
+    pub gen_power: Vec<(Cond, crate::gen::Num, Target)>,
+    pub gen_base_power: Vec<(Cond, crate::gen::Num, Target)>,
+    pub no_ko_battle_by: Vec<(Cond, Target, crate::gen::Pred)>,
+    pub hand_discount: Vec<(Cond, crate::gen::Pred, i32)>,
+    pub deck_out_at_end: bool,
+    pub deck_out_wins: bool,
+    pub don_deck_size: Option<u32>,
+    pub gen_cost: Vec<(Cond, crate::gen::Num, Target)>,
+    pub gen_counter: Vec<(Cond, crate::gen::Pred, i32)>,
+    pub no_ko_effect_by: Vec<(Cond, Target, crate::gen::Pred)>,
+    pub play_rested: bool,
+    pub don_phase_to_leader: bool,
+    pub faceup_life_to_deck: bool,
+    pub no_own_on_play: bool,
+    pub no_effect_play: bool,
     pub unimplemented: Vec<String>,
+    /// lines the second compiler read
+    pub second: Vec<String>,
 }
 
 pub fn compile_card(effect_text: &str, trigger_text: &str) -> Compiled {
+    compile_card_with(effect_text, trigger_text, &|_| false)
+}
+
+/// `scripted(line)`: a hand-written script implements this line, so the second compiler leaves it.
+pub fn compile_card_with(effect_text: &str, trigger_text: &str, scripted: &dyn Fn(&str) -> bool) -> Compiled {
     let mut out = Compiled::default();
     let mut groups: Vec<(String, Vec<String>)> = vec![];
     for raw in effect_lines(&format!("{effect_text}\n{trigger_text}")) {
-        if raw.starts_with('•') && !groups.is_empty() {
+        // options of "choose one:" are bulleted with • (some cards use -)
+        let dash = raw.starts_with("- ") && groups.last().map_or(false, |(g, b)| g.ends_with(" one:") || !b.is_empty() && b[0].starts_with("- "));
+        if (raw.starts_with('•') || dash) && !groups.is_empty() {
             groups.last_mut().unwrap().1.push(raw);
         } else {
             groups.push((raw, vec![]));
         }
     }
     for (raw, bullets) in groups {
-        let norm: Vec<String> = bullets.iter().map(|b| normalize(b.trim_start_matches('•'))).collect();
-        if compile_line(&normalize(&raw), &raw, &mut out, &norm).is_err() {
+        let norm: Vec<String> = bullets.iter().map(|b| normalize(b.trim_start_matches('•').trim_start_matches("- "))).collect();
+        // lines the first compiler (kept in step with Python) can't read go to the second
+        if compile_line(&normalize(&raw), &raw, &mut out, &norm).is_err()
+            && !scripted(&raw)
+            && {
+                let ok = crate::compile2::compile_line2(&crate::compile2::normalize2(&raw), &raw, &mut out, &norm).is_ok();
+                if ok {
+                    out.second.push(raw.clone());
+                }
+                !ok
+            }
+        {
             out.unimplemented.push(raw);
             out.unimplemented.extend(bullets);
         }
@@ -135,20 +171,20 @@ pub fn compile_card(effect_text: &str, trigger_text: &str) -> Compiled {
 // ---------------------------------------------------------------- line structure
 
 #[derive(Default)]
-struct Spec {
-    once_per_turn: bool,
-    don_req: u32,
-    your_turn: bool,
-    opp_turn: bool,
+pub(crate) struct Spec {
+    pub once_per_turn: bool,
+    pub don_req: u32,
+    pub your_turn: bool,
+    pub opp_turn: bool,
 }
 
 #[derive(Default)]
-struct ParsedCosts {
-    rest_don: Option<u32>,
-    don_minus: Option<u32>,
-    rest_self: bool,
-    k: Costs,
-    any_resolving: bool,
+pub(crate) struct ParsedCosts {
+    pub rest_don: Option<u32>,
+    pub don_minus: Option<u32>,
+    pub rest_self: bool,
+    pub k: Costs,
+    pub any_resolving: bool,
 }
 
 const COST_PARTS: [(&str, &str); 18] = [
@@ -172,7 +208,7 @@ const COST_PARTS: [(&str, &str); 18] = [
     (r"(?:and|,)\s*", ""),
 ];
 
-fn parse_costs(prefix: &str) -> Res<ParsedCosts> {
+pub(crate) fn parse_costs(prefix: &str) -> Res<ParsedCosts> {
     let mut c = ParsedCosts::default();
     let mut rest = prefix.to_string();
     while !rest.is_empty() {
@@ -250,7 +286,7 @@ fn parse_costs(prefix: &str) -> Res<ParsedCosts> {
     Ok(c)
 }
 
-const CHOOSE_ONE: &str =
+pub(crate) const CHOOSE_ONE: &str =
     r"(?:(?P<pre>.+?),? then |(?P<pre2>.+?\.) Then, )?(?P<who>Your opponent chooses|[Cc]hoose) one:";
 
 fn compile_line(line: &str, raw: &str, out: &mut Compiled, bullets: &[String]) -> Res<()> {
@@ -439,7 +475,7 @@ fn choose_one(bullets: &[String], opponent: bool) -> Res<Body> {
 
 // ---------------------------------------------------------------- conditions
 
-fn cond_part(clause: &str) -> Option<Cond> {
+pub(crate) fn cond_part(clause: &str) -> Option<Cond> {
     let dir = |s: &str| if s == "less" { Dir::Less } else { Dir::More };
     let num = |m: &Captures, i: usize| m[i].parse::<i32>().unwrap();
     if let Some(m) = rfull(r"your Leader is \[([^\]]+)\] or has the \{([^}]+)\} type", clause) {
@@ -521,7 +557,7 @@ fn cond_part(clause: &str) -> Option<Cond> {
 }
 
 /// 'If A and B, rest' -> (condition, rest), or None if the text doesn't start with a known condition.
-fn match_condition(text: &str) -> Option<(Cond, String)> {
+pub(crate) fn match_condition(text: &str) -> Option<(Cond, String)> {
     let m = rmatch(r"If (.+?), ", text)?;
     let mut conds = vec![];
     for clause in m[1].split(" and ") {
@@ -662,7 +698,7 @@ const OWN_PART: &str = concat!(
 
 /// Which of your cards a phrase allows: 'Leader or Characters', '[Nami] cards', ... With
 /// `chars_only` the phrase must name only Characters (costs paid with them).
-fn own_candidates(who: &str, chars_only: bool) -> Res<Vec<OwnPart>> {
+pub(crate) fn own_candidates(who: &str, chars_only: bool) -> Res<Vec<OwnPart>> {
     let mut parts = vec![];
     for text in re(r" or up to \d+ of your ".to_string()).split(who) {
         let m = rfull(OWN_PART, text).ok_or(Unsupported)?;

@@ -76,6 +76,38 @@ pub struct PlayerState {
     pub don_active: u32,
     pub don_rested: u32,
     pub no_character_play_turn: i32,
+    /// the turn this player can't add Life cards to their hand with their own effects
+    pub no_life_to_hand_turn: i32,
+    /// DON!! to set active at the end of this turn
+    pub don_active_at_end: u32,
+    /// how many DON!! were returned to the DON!! deck last time some were
+    pub don_just_returned: u32,
+    /// (turn, base cost): this turn Characters with that base cost or more can't be played
+    pub no_play_cost: (i32, i32),
+    /// the last turn one of this player's Characters was K.O.'d
+    pub ko_turn: i32,
+    /// "the next time you play ... this turn, the cost will be reduced by N": (turn, which cards, N)
+    pub next_play_discount: Option<(i32, crate::gen::Pred, i32)>,
+    /// rested DON!! that stay rested in the next Refresh Phase
+    pub don_skip_refresh: u32,
+    /// turn-long restrictions, by the turn they apply to
+    pub no_draw_turn: i32,
+    pub no_hand_play_turn: i32,
+    pub no_don_active_by_char_turn: i32,
+    pub battle_ko_shield_turn: i32,
+    /// this player's [On Play] effects are negated through this turn
+    pub on_play_off_until: i32,
+    pub extra_turn: bool,
+    /// (turn, highest base cost) of the Events activated
+    pub event_cost: (i32, i32),
+    /// the last turn a card was trashed from this hand by an effect
+    pub hand_trashed_turn: i32,
+    /// active DON!! to rest at the start of the next Main Phase
+    pub rest_don_at_main: u32,
+    /// the last turn this player's Leader battled a Character
+    pub leader_battled_char_turn: i32,
+    /// the turn this player can't attack the opponent's Leader
+    pub no_leader_attack_turn: i32,
 }
 
 impl PlayerState {
@@ -92,6 +124,24 @@ impl PlayerState {
             don_active: 0,
             don_rested: 0,
             no_character_play_turn: -1,
+            no_life_to_hand_turn: -1,
+            don_active_at_end: 0,
+            don_just_returned: 0,
+            no_play_cost: (-1, 0),
+            ko_turn: -1,
+            next_play_discount: None,
+            don_skip_refresh: 0,
+            no_draw_turn: -1,
+            no_hand_play_turn: -1,
+            no_don_active_by_char_turn: -1,
+            battle_ko_shield_turn: -1,
+            on_play_off_until: -1,
+            extra_turn: false,
+            event_cost: (-1, -1),
+            hand_trashed_turn: -1,
+            rest_don_at_main: 0,
+            leader_battled_char_turn: -1,
+            no_leader_attack_turn: -1,
         }
     }
     /// Leader, Characters, then Stage, without allocating.
@@ -141,6 +191,58 @@ pub struct State {
     pub battle: Option<Battle>,
     pub queue: Vec<Pending>,
     pub resolving_batch: Option<u32>,
+    /// the last K.O.: (owner of the card, whose effect or None, in battle)
+    pub ko_ctx: Option<(u8, Option<u8>, bool, Uid)>,
+    /// the last card removed from the field by an effect: (card, its owner, whose effect)
+    pub removed_ctx: Option<(Uid, u8, Option<u8>)>,
+    /// the last Character played: (card, the zone it was played from)
+    pub played_ctx: Option<(Uid, Option<Zone>)>,
+    /// who returned the last DON!! to a DON!! deck (an effect's player)
+    pub don_return_by: Option<u8>,
+    /// actions for the end of the current battle: (card, incarnation, what, whose effect)
+    pub battle_end: Vec<(Uid, u32, LaterVerb, u8)>,
+    /// where the last card that left a Life area went
+    pub life_left_to: Option<Zone>,
+    /// the last time cards were trashed from a hand by an effect: (how many, whose effect's card)
+    pub hand_trashed_ctx: (usize, Option<Uid>),
+    /// the last Character played was played by an effect of this card
+    pub played_by: Option<Uid>,
+    /// the last card rested by an effect was rested by an effect of this card
+    pub rested_by: Option<Uid>,
+    /// "... at the end of this turn"
+    pub delayed: Vec<Delayed>,
+}
+
+/// Something an effect does at the end of the turn it resolved in.
+#[derive(Clone, Debug)]
+pub struct Delayed {
+    pub turn: i32,
+    pub player: u8,
+    pub kind: DelayedKind,
+}
+
+#[derive(Clone, Debug)]
+pub enum DelayedKind {
+    /// (card, its incarnation then, what happens)
+    Card(Uid, u32, LaterVerb),
+    DeckToLife(usize),
+    AddDonActive(u32),
+    /// trash 1 of your Characters that fit (chosen then)
+    TrashOne(crate::gen::Pred),
+    /// set all of your Characters that fit as active
+    SetActiveAll(crate::gen::Pred),
+    /// return DON!! from your field until you have as many as your opponent
+    DonMatch,
+    /// up to 1 rested Character that fits won't become active in its owner's next Refresh Phase
+    NoRefreshOne(crate::gen::Pred),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaterVerb {
+    Trash,
+    ToHand,
+    ToDeckBottom,
+    SetActive,
 }
 
 /// Why a segment stopped early.
@@ -163,6 +265,15 @@ pub struct Eng<'a> {
     logging: bool,
     labels: bool,
     in_static_cost: Cell<bool>,
+    /// the cards the last general action chose ("it"), and whether it did anything (gen.rs)
+    pub last: Vec<Uid>,
+    pub did: bool,
+    /// how many cards the last general action took ("for every card trashed")
+    pub count: usize,
+    /// "Choose a cost and reveal ...": the cost chosen
+    pub guess: Option<i32>,
+    /// the card whose effect is resolving
+    pub cur_src: Option<Uid>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -256,6 +367,7 @@ impl<'a> Eng<'a> {
             chosen.push(c);
             remove_first(&mut cands, c);
         }
+        self.last = chosen.clone(); // what "it" / "that Character" means in later sentences
         Ok(chosen)
     }
 
@@ -271,7 +383,19 @@ impl<'a> Eng<'a> {
         v
     }
     pub fn negated(&self, u: Uid) -> bool {
-        self.c(u).mods.iter().any(|m| m.kind == ModKind::Negated)
+        if self.c(u).mods.iter().any(|m| m.kind == ModKind::Negated) {
+            return true;
+        }
+        let c = self.c(u);
+        if !matches!(c.zone, Some(Zone::Leader) | Some(Zone::Character)) {
+            return false;
+        }
+        // "Your Leader and all of your Characters that do not have a type including X have their effects negated"
+        self.ps(c.owner).characters.iter().any(|&s| {
+            s != u
+                && self.d(s).st.negate_own_except.as_ref().map_or(false, |t| !self.d(u).type_includes(t))
+                && !self.c(s).mods.iter().any(|m| m.kind == ModKind::Negated)
+        })
     }
     pub fn negate(&mut self, u: Uid, until: Until, by: Option<u8>) {
         let player = by.unwrap_or(self.s.turn_player);
@@ -306,6 +430,12 @@ impl<'a> Eng<'a> {
                     best = Some(best.map_or(v, |b| b.max(v)));
                 }
             }
+            for (cond, n, to) in &self.d(src).st.gen_base_power {
+                if self.target_ok(to, src, u) && self.eval(cond, src) {
+                    let v = self.num(n, src);
+                    best = Some(best.map_or(v, |b| b.max(v)));
+                }
+            }
         }
         best.unwrap_or(self.d(u).power) // 4-9-2-1: highest value wins
     }
@@ -323,6 +453,11 @@ impl<'a> Eng<'a> {
         }
         for src in self.static_sources() {
             p += self.static_power(src, u);
+        }
+        if let Some(i) = c.mods.iter().rposition(|m| matches!(m.kind, ModKind::PowerSet(_))) {
+            // "set the power to 0": then only what was added since counts
+            let ModKind::PowerSet(v) = c.mods[i].kind else { unreachable!() };
+            p = v + c.mods[i + 1..].iter().map(|m| if let ModKind::Power(x) = m.kind { x } else { 0 }).sum::<i32>();
         }
         p // may be negative (1-3-6-1)
     }
@@ -343,10 +478,39 @@ impl<'a> Eng<'a> {
             }
             if c.zone == Some(Zone::Hand) {
                 v += self.hand_cost(u);
+                v -= self.hand_discount(u);
             }
             self.in_static_cost.set(false);
         }
+        if let Some(i) = c.mods.iter().rposition(|m| matches!(m.kind, ModKind::CostSet(_))) {
+            let ModKind::CostSet(x) = c.mods[i].kind else { unreachable!() };
+            v = x + c.mods[i + 1..].iter().map(|m| if let ModKind::Cost(y) = m.kind { y } else { 0 }).sum::<i32>();
+        }
         v.max(0)
+    }
+
+    /// Cost reductions for playing this card from hand: permanent ones from the owner's cards,
+    /// and "the next time you play ..." this turn.
+    fn hand_discount(&self, u: Uid) -> i32 {
+        let owner = self.owner(u);
+        let mut v = 0;
+        for src in self.ps(owner).field_iter() {
+            if self.negated(src) {
+                continue;
+            }
+            for (cond, pred, n) in &self.d(src).st.hand_discount {
+                if self.eval(cond, src) && self.pred_ok(pred, u, src) {
+                    v += n;
+                }
+            }
+        }
+        let ps = self.ps(owner);
+        if let Some((turn, pred, n)) = &ps.next_play_discount {
+            if *turn == self.s.turn_number && self.pred_ok(pred, u, u) {
+                v += n;
+            }
+        }
+        v
     }
 
     /// 2-10-4: with several Counters, the highest applies.
@@ -360,6 +524,13 @@ impl<'a> Eng<'a> {
         for src in self.static_sources() {
             if let Some(f) = self.d(src).st.counter {
                 best = best.max(f(self, src, u).unwrap_or(0));
+            }
+            if self.c(u).zone == Some(Zone::Hand) && self.owner(src) == self.owner(u) {
+                for (cond, pred, v) in &self.d(src).st.gen_counter {
+                    if self.eval(cond, src) && self.pred_ok(pred, u, src) {
+                        best = best.max(*v);
+                    }
+                }
             }
         }
         best
@@ -434,6 +605,7 @@ impl<'a> Eng<'a> {
             return; // Leaders never leave the Leader area (3-6-3)
         }
         let in_list = self.with_zone(owner, old, |l| l.remove_uid(u)).is_some();
+        let left_life = old == Some(Zone::Life) && zone != Some(Zone::Life);
         if !in_list && old == Some(Zone::Stage) {
             self.psm(owner).stage = None;
         }
@@ -451,6 +623,15 @@ impl<'a> Eng<'a> {
         } else if zone.is_some() {
             self.with_zone(owner, zone, |l| l.put(u, bottom)).expect("unknown zone");
         }
+        if left_life {
+            self.s.life_left_to = zone;
+            let (mine, theirs) = (self.ps(owner).field(), self.ps(1 - owner).field());
+            self.fire(Timing::LifeLeft, &mine);
+            self.fire(Timing::OppLifeLeft, &theirs);
+            if self.ps(owner).life.is_empty() {
+                self.fire(Timing::LifeZero, &mine);
+            }
+        }
     }
 
     pub fn mv(&mut self, u: Uid, zone: Zone) {
@@ -460,12 +641,30 @@ impl<'a> Eng<'a> {
     // ------------------------------------------------------------ effect helpers
 
     pub fn draw(&mut self, p: u8, n: usize) {
+        let mut drew = 0;
         for _ in 0..n {
             match self.ps(p).deck.last() {
                 Some(&top) => self.mv(top, Zone::Hand),
-                None => return,
+                None => break,
             }
+            drew += 1;
         }
+        if drew > 0 && !matches!(self.s.phase, Phase::Draw | Phase::Setup) {
+            let field = self.ps(p).field();
+            self.fire(Timing::Drew, &field);
+        }
+    }
+
+    /// Draws by effects, unless "you cannot draw cards using your own effects" this turn.
+    pub fn effect_draw(&mut self, p: u8, n: usize, by: u8) {
+        if p == by && self.ps(p).no_draw_turn == self.s.turn_number {
+            return;
+        }
+        self.draw(p, n);
+    }
+
+    pub fn add_mod_pub(&mut self, u: Uid, kind: ModKind, until: Until, by: Option<u8>) {
+        self.add_mod(u, kind, until, by);
     }
 
     fn add_mod(&mut self, u: Uid, kind: ModKind, until: Until, by: Option<u8>) {
@@ -495,7 +694,19 @@ impl<'a> Eng<'a> {
         for &c in &cards {
             self.mv(c, Zone::Trash);
         }
+        self.hand_trashed(p, cards.len());
         Ok(cards)
+    }
+
+    /// "When a card is trashed from your hand by an effect"
+    pub fn hand_trashed(&mut self, p: u8, n: usize) {
+        if n > 0 {
+            self.s.hand_trashed_ctx = (n, self.cur_src);
+            let t = self.s.turn_number;
+            self.psm(p).hand_trashed_turn = t;
+            let field = self.ps(p).field();
+            self.fire(Timing::HandTrashed, &field);
+        }
     }
 
     /// Move up to n DON!! from the DON!! deck to the cost area. Returns how many moved.
@@ -523,12 +734,31 @@ impl<'a> Eng<'a> {
             n
         };
         self.cm(target).don += n;
+        if n > 0 && matches!(self.c(target).zone, Some(Zone::Leader) | Some(Zone::Character)) {
+            let field = self.ps(self.owner(target)).field();
+            self.fire(Timing::DonGiven, &field);
+        }
         n
     }
 
+    /// "When ... is removed from the field by ... effect" triggers.
+    fn removed(&mut self, card: Uid, by: Option<u8>) {
+        self.s.removed_ctx = Some((card, self.owner(card), by));
+        let field = self.ordered_field();
+        self.fire(Timing::Removed, &field);
+    }
+
     /// Offer the owner's replacement effects for `card` leaving the field. True if one was used.
-    fn replaced(&mut self, card: Uid, by: Option<u8>, ko: bool) -> R<bool> {
+    fn replaced(&mut self, card: Uid, by: Option<u8>, ko: bool, in_battle: bool) -> R<bool> {
         let owner = self.owner(card);
+        if ko && in_battle && self.ps(owner).battle_ko_shield_turn == self.s.turn_number && !self.ps(owner).hand.is_empty() {
+            // "If any of your Characters would be K.O.'d in battle during this turn, you may trash 1 card ... instead"
+            let n = self.name(card);
+            if self.confirm(owner, &format!("Trash 1 card from your hand instead of {n} being K.O.'d?"))? {
+                self.trash_from_hand(owner, 1)?;
+                return Ok(true);
+            }
+        }
         for src in self.ps(owner).field() {
             if self.negated(src) {
                 continue;
@@ -549,6 +779,25 @@ impl<'a> Eng<'a> {
                     let (s, c) = (self.name(src), self.name(card));
                     self.log(|| format!("{s} replaces the removal of {c}"));
                     (r.pay)(self, src, card)?;
+                    return Ok(true);
+                }
+            }
+            for (j, (r, text, opt)) in self.d(src).st.gen_replacements.iter().enumerate() {
+                let key = REPLACEMENT_KEY + 100 + j;
+                if *opt && self.c(src).opt_turn(key) == Some(self.s.turn_number) {
+                    continue;
+                }
+                if !self.rep_applies(r, src, card, by, ko, in_battle) {
+                    continue;
+                }
+                if !r.optional || self.confirm(owner, &format!("{}: {}?", self.name(src), text))? {
+                    if *opt {
+                        let t = self.s.turn_number;
+                        self.cm(src).set_opt(key, t);
+                    }
+                    let (s, c) = (self.name(src), self.name(card));
+                    self.log(|| format!("{s} replaces the removal of {c}"));
+                    self.rep_pay(r, src, card)?;
                     return Ok(true);
                 }
             }
@@ -582,10 +831,14 @@ impl<'a> Eng<'a> {
         if !matches!(self.c(card).zone, Some(Zone::Character) | Some(Zone::Stage)) {
             return Ok(false);
         }
-        if self.replaced(card, by, false)? {
+        if by == Some(1 - self.owner(card)) && self.has_keyword(card, Kw::NoRemoveByOpp) {
+            return Ok(false);
+        }
+        if self.replaced(card, by, false, false)? {
             return Ok(false);
         }
         self.move_card(card, Some(zone), bottom, face_up);
+        self.removed(card, by);
         Ok(true)
     }
 
@@ -648,7 +901,10 @@ impl<'a> Eng<'a> {
                     ps.don_active -= 1;
                     ps.don_rested += 1;
                 }
-                Some(c) => self.cm(c).rested = true,
+                Some(c) => {
+                    self.cm(c).rested = true;
+                    self.fire(Timing::BecameRested, &[c]);
+                }
             }
         }
         Ok(())
@@ -665,10 +921,35 @@ impl<'a> Eng<'a> {
 
     fn ko_prevented(&self, card: Uid, by: Option<u8>, in_battle: bool) -> bool {
         if in_battle {
-            return self.has_keyword(card, Kw::NoKoInBattle);
+            if self.has_keyword(card, Kw::NoKoInBattle) {
+                return true;
+            }
+            // "cannot be K.O.'d in battle by <Slash> attribute cards": the card it battles
+            let other = self.s.battle.as_ref().map(|b| if b.attacker == card { b.target } else { b.attacker });
+            return other.map_or(false, |o| {
+                self.static_sources().any(|src| {
+                    self.d(src).st.no_ko_battle_by.iter().any(|(cond, to, pred)| {
+                        self.target_ok(to, src, card) && self.eval(cond, src) && self.pred_ok(pred, o, src)
+                    })
+                })
+            });
         }
         if self.has_keyword(card, Kw::NoKoByEffects) {
             return true;
+        }
+        if by == Some(1 - self.owner(card)) && self.has_keyword(card, Kw::NoRemoveByOpp) {
+            return true;
+        }
+        if let Some(s) = self.cur_src {
+            // "cannot be K.O.'d by effects of your opponent's Characters with 5000 base power or less"
+            let hit = self.static_sources().any(|src| {
+                self.d(src).st.no_ko_effect_by.iter().any(|(cond, to, pred)| {
+                    self.target_ok(to, src, card) && self.eval(cond, src) && self.pred_ok(pred, s, src)
+                })
+            });
+            if hit {
+                return true;
+            }
         }
         by == Some(1 - self.owner(card)) && self.has_keyword(card, Kw::NoKoByOppEffects)
     }
@@ -684,11 +965,14 @@ impl<'a> Eng<'a> {
             self.log(|| format!("{name} cannot be K.O.'d"));
             return Ok(());
         }
-        if replaceable && self.replaced(card, by, true)? {
+        if replaceable && self.replaced(card, by, true, in_battle)? {
             return Ok(());
         }
+        self.s.ko_ctx = Some((self.owner(card), by, in_battle, card));
         let ready: Vec<usize> =
             self.d(card).effect_indexes(Timing::OnKo).filter(|&i| self.can_activate(card, i)).collect();
+        let field: Vec<Uid> = self.ordered_field().into_iter().filter(|&c| c != card).collect();
+        self.fire(Timing::CharKo, &field);
         // "when one of your Characters ... is K.O.'d": judged while the card is still on the field
         let owner = self.owner(card);
         let mut watchers = vec![];
@@ -715,6 +999,11 @@ impl<'a> Eng<'a> {
             }
         }
         self.mv(card, Zone::Trash);
+        let t = self.s.turn_number;
+        self.psm(owner).ko_turn = t;
+        if !in_battle && by.is_some() {
+            self.removed(card, by); // a K.O. by an effect removes it from the field
+        }
         for i in paid {
             let p = Pending { src: card, idx: i, inc: self.c(card).incarnation, batch: self.next_batch(), activated: true };
             self.s.queue.push(p);
@@ -740,6 +1029,10 @@ impl<'a> Eng<'a> {
 
     /// Damage processing (4-6, 7-1-4-1-1).
     pub fn deal_damage(&mut self, p: u8, amount: u32, banish: bool) -> R<()> {
+        if amount > 0 {
+            let field = self.ps(p).field();
+            self.fire(Timing::TookDamage, &field);
+        }
         for _ in 0..amount {
             // one point at a time (4-6-2-2)
             if self.damage_replaced(p)? {
@@ -766,6 +1059,10 @@ impl<'a> Eng<'a> {
             };
             if activate {
                 self.move_card(card, None, false, false); // in no area while it resolves (10-1-5-3)
+                let field = self.ordered_field();
+                self.fire(Timing::TriggerUsed, &field);
+                let other = self.ps(1 - p).field();
+                self.fire(Timing::OppTrigger, &other);
                 self.log(|| format!("Player {p} activates [Trigger] of {name}"));
                 self.resolve(card, trig[0])?;
                 if self.c(card).zone.is_none() {
@@ -773,6 +1070,9 @@ impl<'a> Eng<'a> {
                 } else if self.c(card).zone == Some(Zone::Hand) {
                     self.cm(card).revealed = true; // e.g. "add this card to your hand": everyone saw it
                 }
+            } else if self.c(card).face_up && self.d(self.ps(p).leader).st.faceup_life_to_deck {
+                // "Your face-up Life cards are placed at the bottom of your deck instead"
+                self.move_card(card, Some(Zone::Deck), true, false);
             } else {
                 self.mv(card, Zone::Hand);
                 let left = self.ps(p).life.len();
@@ -840,6 +1140,7 @@ impl<'a> Eng<'a> {
         }
         if eff.rest_self {
             self.cm(src).rested = true;
+            self.fire(Timing::BecameRested, &[src]);
         }
         if eff.rest_don > 0 {
             let ps = self.psm(owner);
@@ -852,8 +1153,76 @@ impl<'a> Eng<'a> {
         Ok(true)
     }
 
+    fn run_delayed(&mut self, d: &Delayed) -> R<()> {
+        match d.kind.clone() {
+            DelayedKind::Card(u, inc, v) => {
+                if self.c(u).incarnation != inc {
+                    return Ok(()); // it left the field (or moved) since
+                }
+                match v {
+                    LaterVerb::Trash => {
+                        self.remove_from_field(u, Zone::Trash, Some(d.player), false, false)?;
+                    }
+                    LaterVerb::ToHand => {
+                        self.remove_from_field(u, Zone::Hand, Some(d.player), false, false)?;
+                    }
+                    LaterVerb::ToDeckBottom => {
+                        self.remove_from_field(u, Zone::Deck, Some(d.player), true, false)?;
+                    }
+                    LaterVerb::SetActive => self.cm(u).rested = false,
+                }
+            }
+            DelayedKind::DeckToLife(n) => {
+                for _ in 0..n {
+                    let Some(&top) = self.ps(d.player).deck.last() else { break };
+                    self.mv(top, Zone::Life);
+                }
+            }
+            DelayedKind::AddDonActive(n) => {
+                self.add_don(d.player, n, false);
+            }
+            DelayedKind::TrashOne(pred) => {
+                let me = d.player;
+                let leader = self.ps(me).leader;
+                let cands = self.characters(me).into_iter().filter(|&c| self.pred_ok(&pred, c, leader)).collect();
+                for c in self.choose_cards(me, cands, 1, "Trash 1 at the end of the turn", true)? {
+                    self.remove_from_field(c, Zone::Trash, Some(me), false, false)?;
+                }
+            }
+            DelayedKind::SetActiveAll(pred) => {
+                let leader = self.ps(d.player).leader;
+                for c in self.characters(d.player) {
+                    if self.pred_ok(&pred, c, leader) {
+                        self.cm(c).rested = false;
+                    }
+                }
+            }
+            DelayedKind::DonMatch => {
+                let (me, o) = (d.player, 1 - d.player);
+                let extra = self.don_on_field(me).saturating_sub(self.don_on_field(o));
+                if extra > 0 {
+                    self.return_don(me, extra)?;
+                }
+            }
+            DelayedKind::NoRefreshOne(pred) => {
+                let me = d.player;
+                let leader = self.ps(me).leader;
+                let cands = (0..2u8)
+                    .flat_map(|p| self.characters(p))
+                    .filter(|&c| self.c(c).rested && self.pred_ok(&pred, c, leader))
+                    .collect();
+                for c in self.choose_cards(me, cands, 1, "Won't become active next Refresh Phase", false)? {
+                    self.skip_next_refresh(c, me);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// DON!! -X (8-3-1-6, 10-2-10).
     pub fn return_don(&mut self, p: u8, n: u32) -> R<()> {
+        let mut returned = 0;
+        let by = self.s.don_return_by.take().unwrap_or(p);
         for _ in 0..n {
             let mut opts = vec![];
             if self.ps(p).don_rested > 0 {
@@ -879,7 +1248,10 @@ impl<'a> Eng<'a> {
                 self.psm(p).don_active -= 1;
             }
             self.psm(p).don_deck += 1;
+            returned += 1;
         }
+        self.psm(p).don_just_returned = returned;
+        self.s.don_return_by = Some(by);
         let field = self.ps(p).field();
         self.fire(Timing::DonReturned, &field);
         Ok(())
@@ -896,7 +1268,19 @@ impl<'a> Eng<'a> {
             };
             format!("{name}: {text}").trim_end().to_string()
         });
-        self.run(&eff.body, src)
+        // "that Character" in a triggered effect: the card that set it off
+        self.last = match eff.timing {
+            Timing::MyPlay | Timing::OppPlay => self.s.played_ctx.map(|(c, _)| c).into_iter().collect(),
+            Timing::CharKo => self.s.ko_ctx.map(|(_, _, _, c)| c).into_iter().collect(),
+            Timing::Removed => self.s.removed_ctx.map(|(c, _, _)| c).into_iter().collect(),
+            _ => vec![],
+        };
+        self.count = 0;
+        self.guess = None;
+        let outer = self.cur_src.replace(src);
+        let r = self.run(&eff.body, src);
+        self.cur_src = outer;
+        r
     }
 
     pub fn activate(&mut self, src: Uid, idx: usize) -> R<()> {
@@ -1003,7 +1387,25 @@ impl<'a> Eng<'a> {
 
     /// Defeat judgment (9-2): a player with 0 cards in deck loses.
     pub fn check_rules(&mut self) -> R<()> {
-        let losers: Vec<u8> = (0..2u8).filter(|&p| self.ps(p).deck.is_empty()).collect();
+        self.deck_out(false)
+    }
+
+    /// Defeat by an empty deck. Leaders can change it: "you win instead of losing", or "you
+    /// lose at the end of the turn in which your deck becomes 0" (checked with `end_of_turn`).
+    fn deck_out(&mut self, end_of_turn: bool) -> R<()> {
+        for p in 0..2u8 {
+            let st = &self.d(self.ps(p).leader).st;
+            if self.ps(p).deck.is_empty() && st.deck_out_wins && !self.negated(self.ps(p).leader) {
+                self.log(|| format!("Player {p}'s deck is reduced to 0: they win"));
+                return Err(Stop::Over(Some(p)));
+            }
+        }
+        let losers: Vec<u8> = (0..2u8)
+            .filter(|&p| {
+                let l = self.ps(p).leader;
+                self.ps(p).deck.is_empty() && (end_of_turn || !(self.d(l).st.deck_out_at_end && !self.negated(l)))
+            })
+            .collect();
         match losers.len() {
             2 => Err(Stop::Over(None)),
             1 => {
@@ -1029,7 +1431,9 @@ impl<'a> Eng<'a> {
                 let a = self.choose(p, DecisionKind::Main, opts, "Main Phase")?;
                 if a.kind == ActKind::End {
                     self.turn_end()?;
-                    self.s.turn_player = 1 - self.s.turn_player;
+                    if !std::mem::take(&mut self.psm(p).extra_turn) {
+                        self.s.turn_player = 1 - self.s.turn_player; // "take an extra turn after this one" keeps it
+                    }
                     self.turn_begin()?;
                 } else {
                     self.do_main_action(p, &a)?;
@@ -1042,6 +1446,11 @@ impl<'a> Eng<'a> {
     }
 
     fn setup(&mut self) -> R<()> {
+        for p in 0..2u8 {
+            if let Some(n) = self.d(self.ps(p).leader).st.don_deck_size {
+                self.psm(p).don_deck = n; // "your DON!! deck consists of 6 cards"
+            }
+        }
         let chooser = self.s.rng.randrange(2) as u8;
         let a = self.choose(
             chooser,
@@ -1105,6 +1514,14 @@ impl<'a> Eng<'a> {
         // Refresh Phase (6-2)
         self.s.phase = Phase::Refresh;
         self.expire(Until::NextTurn, Some(p));
+        for c in self.s.cards.iter_mut() {
+            // "until the end of your next turn": from now on, until the end of this one
+            for m in c.mods.iter_mut() {
+                if m.until == Until::YourNextEnd && m.player == p {
+                    m.until = Until::Turn;
+                }
+            }
+        }
         let field = self.ordered_field();
         self.fire(Timing::StartOfTurn, &field); // 6-2-2
         self.resolve_triggers()?;
@@ -1114,6 +1531,9 @@ impl<'a> Eng<'a> {
             self.cm(c).don = 0;
         }
         for c in self.ps(p).field() {
+            if self.has_keyword(c, Kw::StayRested) {
+                continue; // "do not become active in your and your opponent's Refresh Phases"
+            }
             let card = self.cm(c);
             if card.mods.iter().any(|m| m.kind == ModKind::NoRefresh) {
                 card.mods.retain(|m| m.kind != ModKind::NoRefresh);
@@ -1122,8 +1542,9 @@ impl<'a> Eng<'a> {
             }
         }
         let ps = self.psm(p);
-        ps.don_active += ps.don_rested;
-        ps.don_rested = 0;
+        let keep = std::mem::take(&mut ps.don_skip_refresh).min(ps.don_rested);
+        ps.don_active += ps.don_rested - keep;
+        ps.don_rested = keep;
 
         // Draw Phase (6-3)
         self.s.phase = Phase::Draw;
@@ -1134,7 +1555,18 @@ impl<'a> Eng<'a> {
         // DON!! Phase (6-4)
         self.s.phase = Phase::Don;
         let n = if self.s.turn_number == 1 { 1 } else { 2 };
-        self.add_don(p, n, false);
+        let had = self.don_on_field(p) > 0;
+        let added = self.add_don(p, n, false);
+        let l = self.ps(p).leader;
+        if added > 0 && had && self.d(l).st.don_phase_to_leader && !self.negated(l) {
+            self.give_don(p, l, 1, false); // "1 DON!! card placed during your DON!! Phase is given to your Leader"
+        }
+        let k = std::mem::take(&mut self.psm(p).rest_don_at_main).min(self.ps(p).don_active);
+        if k > 0 {
+            let ps = self.psm(p);
+            ps.don_active -= k;
+            ps.don_rested += k;
+        }
 
         // Main Phase (6-5)
         self.s.phase = Phase::Main;
@@ -1150,24 +1582,43 @@ impl<'a> Eng<'a> {
         let mine = self.ps(p).field();
         self.fire(Timing::EndOfYourTurn, &mine); // 6-6-1-1-2: all of these first
         self.resolve_triggers()?;
+        let t = self.s.turn_number;
+        let due: Vec<Delayed> = self.s.delayed.iter().filter(|d| d.turn == t).cloned().collect();
+        self.s.delayed.retain(|d| d.turn != t);
+        for d in due {
+            self.run_delayed(&d)?;
+        }
+        for q in [p, 1 - p] {
+            // "set up to N of your DON!! cards as active at the end of this turn"
+            let ps = self.psm(q);
+            let n = std::mem::take(&mut ps.don_active_at_end).min(ps.don_rested);
+            ps.don_rested -= n;
+            ps.don_active += n;
+        }
         let theirs = self.ps(1 - p).field();
         self.fire(Timing::EndOfOppTurn, &theirs);
         self.resolve_triggers()?;
         self.expire(Until::Turn, None);
         self.expire(Until::NextEnd, Some(1 - p)); // "until the end of your opponent's next End Phase"
-        self.check_rules()
+        self.deck_out(true)
     }
 
     pub fn main_options(&self, p: u8) -> Vec<Action> {
         let ps = self.ps(p);
         let mut opts = vec![];
         for &c in &ps.hand {
+            if ps.no_hand_play_turn == self.s.turn_number {
+                break; // "you cannot play cards from your hand during this turn"
+            }
             let cost = self.cost(c);
             if cost > ps.don_active as i32 {
                 continue;
             }
             let d = self.d(c);
             if d.category == Category::Character && ps.no_character_play_turn == self.s.turn_number {
+                continue;
+            }
+            if d.category == Category::Character && ps.no_play_cost.0 == self.s.turn_number && d.cost >= ps.no_play_cost.1 {
                 continue;
             }
             match d.category {
@@ -1203,7 +1654,10 @@ impl<'a> Eng<'a> {
         if self.s.turn_number > 2 {
             // 6-5-6-1: nobody battles on their first turn
             for atk in self.leader_and_characters(p) {
-                if self.c(atk).rested || self.has_keyword(atk, Kw::CannotAttack) {
+                if self.c(atk).rested || self.has_keyword(atk, Kw::CannotAttack) || self.has_keyword(atk, Kw::NoRest) {
+                    continue;
+                }
+                if self.has_keyword(atk, Kw::AttackTax) && self.ps(p).hand.len() < 2 {
                     continue;
                 }
                 for tgt in self.attack_targets(atk) {
@@ -1224,16 +1678,29 @@ impl<'a> Eng<'a> {
         let o = 1 - self.owner(atk);
         let opp = self.ps(o);
         let mut targets = vec![opp.leader];
-        targets.extend(opp.characters.iter().copied().filter(|&c| self.c(c).rested));
+        let any = self.has_keyword(atk, Kw::AttackActive);
+        targets.extend(opp.characters.iter().copied().filter(|&c| any || self.c(c).rested));
         let locks: Vec<&str> = self
             .static_sources()
             .filter(|&src| self.owner(src) != self.owner(atk))
-            .filter(|&src| self.d(src).st.attack_lock.map_or(false, |f| f(self, src)))
+            .filter(|&src| self.d(src).st.attack_lock.map_or(false, |f| f(self, src)) || self.has_keyword(src, Kw::Taunt))
             .map(|src| self.name(src))
             .collect();
         if !locks.is_empty() {
             // "your opponent cannot attack any card other than the Character [X]"
             targets.retain(|&c| self.d(c).category == Category::Character && locks.contains(&self.name(c)));
+        }
+        if self.ps(self.owner(atk)).no_leader_attack_turn == self.s.turn_number {
+            targets.retain(|&c| self.d(c).category != Category::Leader);
+        }
+        if self.has_keyword(atk, Kw::NoAttackLowChars) {
+            targets.retain(|&c| self.d(c).category != Category::Character || self.d(c).cost > 7);
+        }
+        if self.d(atk).category == Category::Character
+            && self.c(atk).played_turn == self.s.turn_number
+            && self.has_keyword(atk, Kw::NoLeaderFirstTurn)
+        {
+            targets.retain(|&c| self.d(c).category != Category::Leader);
         }
         if self.d(atk).category == Category::Character && self.c(atk).played_turn == self.s.turn_number {
             if self.has_keyword(atk, Kw::Rush) {
@@ -1251,7 +1718,13 @@ impl<'a> Eng<'a> {
         match a.kind {
             ActKind::Play => {
                 let card = a.card.unwrap();
+                let used = self.ps(p).next_play_discount.as_ref().map_or(false, |(t, pred, _)| {
+                    *t == self.s.turn_number && self.d(card).category == Category::Character && self.pred_ok(pred, card, card)
+                });
                 self.pay_card_cost(card);
+                if used {
+                    self.psm(p).next_play_discount = None;
+                }
                 if self.d(card).category == Category::Event {
                     self.activate_event(card, Timing::Main)
                 } else {
@@ -1281,12 +1754,22 @@ impl<'a> Eng<'a> {
         let (owner, name) = (self.owner(card), self.name(card));
         self.log(|| format!("Player {owner} activates {name}"));
         self.mv(card, Zone::Trash);
+        let (t, c) = (self.s.turn_number, self.d(card).cost);
+        let ec = &mut self.psm(owner).event_cost;
+        *ec = if ec.0 == t { (t, ec.1.max(c)) } else { (t, c) };
+        let (mine, theirs) = (self.ps(owner).field(), self.ps(1 - owner).field());
+        self.fire(Timing::MyEvent, &mine);
+        self.fire(Timing::OppEvent, &theirs);
         self.activate(card, idx)
     }
 
     fn play_character(&mut self, card: Uid, rested: bool) -> R<()> {
         let owner = self.owner(card);
         if self.ps(owner).no_character_play_turn == self.s.turn_number {
+            return Ok(());
+        }
+        let (t, min) = self.ps(owner).no_play_cost;
+        if t == self.s.turn_number && self.d(card).cost >= min {
             return Ok(());
         }
         if self.ps(owner).characters.len() >= MAX_CHARACTERS {
@@ -1297,6 +1780,10 @@ impl<'a> Eng<'a> {
             let vn = self.name(victim);
             self.log(|| format!("{vn} is trashed to make room"));
         }
+        self.s.played_ctx = Some((card, self.c(card).zone));
+        self.s.played_by = self.cur_src;
+        let l = self.ps(owner).leader;
+        let rested = rested || (self.d(l).st.play_rested && !self.negated(l));
         self.mv(card, Zone::Character);
         let t = self.s.turn_number;
         let c = self.cm(card);
@@ -1304,8 +1791,20 @@ impl<'a> Eng<'a> {
         c.played_turn = t;
         let name = self.name(card);
         self.log(|| format!("Player {owner} plays {name}"));
-        self.fire(Timing::OnPlay, &[card]);
+        if self.on_play_allowed(owner) {
+            self.fire(Timing::OnPlay, &[card]);
+        }
+        let mine: Vec<Uid> = self.ps(owner).field().into_iter().filter(|&c| c != card).collect();
+        let theirs = self.ps(1 - owner).field();
+        self.fire(Timing::MyPlay, &mine);
+        self.fire(Timing::OppPlay, &theirs);
         Ok(())
+    }
+
+    /// "Your [On Play] effects are negated": by the Leader's rule or an opponent's effect.
+    fn on_play_allowed(&self, p: u8) -> bool {
+        let l = self.ps(p).leader;
+        !(self.d(l).st.no_own_on_play && !self.negated(l)) && self.ps(p).on_play_off_until < self.s.turn_number
     }
 
     fn play_stage(&mut self, card: Uid) {
@@ -1317,7 +1816,9 @@ impl<'a> Eng<'a> {
         self.cm(card).played_turn = self.s.turn_number;
         let name = self.name(card);
         self.log(|| format!("Player {owner} plays {name}"));
-        self.fire(Timing::OnPlay, &[card]);
+        if self.on_play_allowed(owner) {
+            self.fire(Timing::OnPlay, &[card]);
+        }
     }
 
     // ------------------------------------------------------------ battle (7)
@@ -1328,6 +1829,13 @@ impl<'a> Eng<'a> {
     }
 
     fn battle(&mut self, attacker: Uid, target: Uid) -> R<()> {
+        for (a, b) in [(attacker, target), (target, attacker)] {
+            if self.d(a).category == Category::Leader && self.d(b).category == Category::Character {
+                let t = self.s.turn_number;
+                let o = self.owner(a);
+                self.psm(o).leader_battled_char_turn = t;
+            }
+        }
         self.s.battle = Some(Battle {
             attacker,
             target,
@@ -1337,6 +1845,23 @@ impl<'a> Eng<'a> {
         let r = self.battle_steps().and_then(|_| {
             // End of the Battle (7-1-5), also reached when a step was cut short
             self.s.phase = Phase::EndOfBattle;
+            for (u, inc, v, by) in std::mem::take(&mut self.s.battle_end) {
+                // "at the end of this battle, place this Character at the bottom of the owner's deck"
+                if self.c(u).incarnation == inc {
+                    match v {
+                        LaterVerb::ToDeckBottom => {
+                            self.remove_from_field(u, Zone::Deck, Some(by), true, false)?;
+                        }
+                        LaterVerb::Trash => {
+                            self.remove_from_field(u, Zone::Trash, Some(by), false, false)?;
+                        }
+                        LaterVerb::ToHand => {
+                            self.remove_from_field(u, Zone::Hand, Some(by), false, false)?;
+                        }
+                        LaterVerb::SetActive => self.cm(u).rested = false,
+                    }
+                }
+            }
             let field = self.ordered_field();
             self.fire(Timing::EndOfBattle, &field);
             self.resolve_triggers()
@@ -1359,6 +1884,11 @@ impl<'a> Eng<'a> {
         // Attack Step
         self.s.phase = Phase::Attack;
         self.cm(attacker).rested = true;
+        if self.has_keyword(attacker, Kw::AttackTax) {
+            let p = self.owner(attacker);
+            self.trash_from_hand(p, 2)?; // "unless your opponent trashes 2 cards from their hand whenever they attack"
+        }
+        self.fire(Timing::BecameRested, &[attacker]);
         let tgt = self.s.battle.as_ref().unwrap().target;
         let (an, ap, td) = (self.name(attacker), self.power(attacker), self.describe(tgt));
         self.log(|| format!("{an} ({ap}) attacks {td}"));
@@ -1382,7 +1912,7 @@ impl<'a> Eng<'a> {
                 .iter()
                 .copied()
                 .filter(|&c| {
-                    c != tgt && !self.c(c).rested && self.has_keyword(c, Kw::Blocker) && !self.has_keyword(c, Kw::NoBlocker)
+                    c != tgt && !self.c(c).rested && self.has_keyword(c, Kw::Blocker) && !self.has_keyword(c, Kw::NoBlocker) && !self.has_keyword(c, Kw::NoRest)
                 })
                 .collect();
             if !blockers.is_empty() {
@@ -1395,6 +1925,9 @@ impl<'a> Eng<'a> {
                 if a.kind == ActKind::Block {
                     let blocker = a.card.unwrap();
                     self.cm(blocker).rested = true;
+                    self.fire(Timing::BecameRested, &[blocker]);
+                    let theirs = self.ps(1 - o).field();
+                    self.fire(Timing::OppBlock, &theirs);
                     let inc = self.c(blocker).incarnation;
                     let b = self.s.battle.as_mut().unwrap();
                     b.target = blocker;
@@ -1468,8 +2001,14 @@ impl<'a> Eng<'a> {
                 let dmg = if self.has_keyword(attacker, Kw::DoubleAttack) { 2 } else { 1 };
                 let banish = self.has_keyword(attacker, Kw::Banish);
                 self.deal_damage(o, dmg, banish)?;
+                self.fire(Timing::DealtDamage, &[attacker]);
+                let mine = self.ps(1 - o).field();
+                self.fire(Timing::MyDamage, &mine);
             } else {
                 self.ko(tgt, None, true, true)?;
+                if self.c(tgt).zone != Some(Zone::Character) {
+                    self.fire(Timing::BattleKo, &[attacker]);
+                }
             }
         } else {
             self.log(|| format!("Attack fails ({atk_power} < {tgt_power})"));
@@ -1611,6 +2150,16 @@ impl Game {
             battle: None,
             queue: vec![],
             resolving_batch: None,
+            ko_ctx: None,
+            removed_ctx: None,
+            played_ctx: None,
+            don_return_by: None,
+            battle_end: vec![],
+            life_left_to: None,
+            hand_trashed_ctx: (0, None),
+            played_by: None,
+            rested_by: None,
+            delayed: vec![],
         };
         let mut log = vec![];
         {
@@ -1623,6 +2172,11 @@ impl Game {
                 logging: false,
                 labels: false,
                 in_static_cost: Cell::new(false),
+            last: vec![],
+            did: false,
+            count: 0,
+            guess: None,
+            cur_src: None,
             };
             for (i, deck) in decks.iter().enumerate() {
                 let i = i as u8;
@@ -1694,6 +2248,11 @@ impl Game {
                     logging: self.logging,
                     labels: self.labels,
                     in_static_cost: Cell::new(false),
+            last: vec![],
+            did: false,
+            count: 0,
+            guess: None,
+            cur_src: None,
                 };
                 let r = e.segment(self.seg);
                 debug_assert!(r.is_ok() || e.pos == self.answers.len());
@@ -1719,6 +2278,20 @@ impl Game {
                 Err(Stop::Diverged) => return false,
             }
         }
+    }
+
+    /// Change the state at the Main Phase decision that opens a segment (tests set up boards
+    /// this way), then ask that decision again.
+    pub fn arrange(&mut self, f: impl FnOnce(&mut Eng)) {
+        let d = self.pending.as_ref().expect("the game is over");
+        assert!(d.kind == DecisionKind::Main && self.answers.is_empty() && self.seg == Seg::Main);
+        {
+            let mut log = vec![];
+            let mut e = self.eng(&mut log);
+            f(&mut e);
+        }
+        self.checkpoint.clone_from(&self.state);
+        self.advance(true);
     }
 
     /// A copy for search: no log, and no log lines, labels or prompts from here on.
@@ -1838,6 +2411,11 @@ impl Game {
             logging: false,
             labels: true,
             in_static_cost: Cell::new(false),
+            last: vec![],
+            did: false,
+            count: 0,
+            guess: None,
+            cur_src: None,
         }
     }
 

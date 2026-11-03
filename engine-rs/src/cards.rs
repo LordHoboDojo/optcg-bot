@@ -56,6 +56,45 @@ pub enum Timing {
     DonReturned,
     /// "when one of your Characters ... is K.O.'d" (Effect::ko_filter)
     AllyKo,
+    /// "When this Character's attack deals damage to your opponent's Life"
+    DealtDamage,
+    /// "When you activate an Event" / "When your opponent activates an Event"
+    MyEvent,
+    OppEvent,
+    /// "When you play a Character" / "When your opponent plays a Character"
+    MyPlay,
+    OppPlay,
+    /// "When this Character becomes rested"
+    BecameRested,
+    /// "When a Character is K.O.'d" (any; the K.O. is in State::ko_ctx)
+    CharKo,
+    /// "When this Character battles and K.O.'s your opponent's Character"
+    BattleKo,
+    /// "When you deal damage to your opponent's Life"
+    MyDamage,
+    /// fired on the defending side's field when it takes damage
+    TookDamage,
+    /// the attacking side's field, when the opponent blocks
+    OppBlock,
+    /// any [Trigger] activating (both fields); the opponent's [Trigger] (your field)
+    TriggerUsed,
+    OppTrigger,
+    /// a card leaves your Life / your opponent's Life
+    LifeLeft,
+    OppLifeLeft,
+    /// one of your Leader or Characters is given DON!!
+    DonGiven,
+    /// a Character or Stage is removed from the field by an effect (State::removed_ctx)
+    Removed,
+    /// a card is trashed from your hand by an effect
+    HandTrashed,
+    /// a Character is rested by your effect (your field) / this card by the opponent's effect
+    RestedByEffect,
+    RestedByOpp,
+    /// you draw outside your Draw Phase
+    Drew,
+    /// your number of Life cards becomes 0
+    LifeZero,
 }
 
 impl Timing {
@@ -79,6 +118,28 @@ impl Timing {
             Self::AttackDeclared => "Attack Declared",
             Self::DonReturned => "DON!! Returned",
             Self::AllyKo => "Ally K.O.",
+            Self::DealtDamage => "Dealt Damage",
+            Self::MyEvent => "You Activate an Event",
+            Self::OppEvent => "Opponent Activates an Event",
+            Self::MyPlay => "You Play a Character",
+            Self::OppPlay => "Opponent Plays a Character",
+            Self::BecameRested => "Becomes Rested",
+            Self::CharKo => "A Character Is K.O.'d",
+            Self::BattleKo => "Battles and K.O.'s",
+            Self::MyDamage => "You Deal Damage",
+            Self::TookDamage => "You Take Damage",
+            Self::OppBlock => "Opponent Blocks",
+            Self::TriggerUsed => "A [Trigger] Activates",
+            Self::OppTrigger => "Opponent's [Trigger] Activates",
+            Self::LifeLeft => "A Card Leaves Your Life",
+            Self::OppLifeLeft => "A Card Leaves Your Opponent's Life",
+            Self::DonGiven => "Given DON!!",
+            Self::Removed => "Removed From the Field",
+            Self::HandTrashed => "Trashed From Hand",
+            Self::RestedByEffect => "Rested By Your Effect",
+            Self::RestedByOpp => "Rested By Your Opponent's Effect",
+            Self::Drew => "You Draw",
+            Self::LifeZero => "Life Becomes 0",
         }
     }
     /// Printed timing tags (effect_text.TIMING_TAGS).
@@ -114,6 +175,28 @@ pub enum Kw {
     NoKoByEffects,
     NoKoByOppEffects,
     NoBlocker,
+    /// cannot be removed from the field by the opponent's effects
+    NoRemoveByOpp,
+    /// cannot be rested (so can't attack or block either)
+    NoRest,
+    /// cannot attack a Leader on the turn in which it is played
+    NoLeaderFirstTurn,
+    /// "your opponent cannot attack any card other than this Character"
+    Taunt,
+    /// cannot be rested by the opponent's effects
+    NoRestByOpp,
+    /// does not become active in Refresh Phases
+    StayRested,
+    /// cannot be rested by the opponent's Leader and Character effects
+    NoRestByOppCards,
+    /// can attack only if its player trashes 2 cards from hand
+    AttackTax,
+    /// cannot attack the opponent's Characters with a base cost of 7 or less
+    NoAttackLowChars,
+    /// has the <Slash> attribute (granted)
+    AttrSlash,
+    /// can also attack active Characters
+    AttackActive,
 }
 
 impl Kw {
@@ -142,6 +225,17 @@ impl Kw {
             Self::NoKoByEffects => "Cannot be K.O.'d by effects",
             Self::NoKoByOppEffects => "Cannot be K.O.'d by your opponent's effects",
             Self::NoBlocker => "Cannot activate [Blocker]",
+            Self::NoRemoveByOpp => "Cannot be removed from the field by your opponent's effects",
+            Self::AttackActive => "Can also attack active Characters",
+            Self::NoRest => "Cannot be rested",
+            Self::NoLeaderFirstTurn => "Cannot attack a Leader on the turn it is played",
+            Self::Taunt => "Must be the target of attacks",
+            Self::NoRestByOpp => "Cannot be rested by your opponent's effects",
+            Self::StayRested => "Does not become active in Refresh Phases",
+            Self::NoRestByOppCards => "Cannot be rested by your opponent's Leader and Character effects",
+            Self::AttackTax => "Attacks only by trashing 2 cards",
+            Self::NoAttackLowChars => "Cannot attack Characters with a base cost of 7 or less",
+            Self::AttrSlash => "<Slash>",
         }
     }
     pub const PRINTED: [Kw; 6] = [Kw::Banish, Kw::Blocker, Kw::DoubleAttack, Kw::Rush, Kw::RushCharacter, Kw::Unblockable];
@@ -208,9 +302,15 @@ pub struct CardDef {
     pub text: String,
     pub trigger_text: String,
     pub unimplemented: Vec<String>,
+    /// "Also treat this card's name as [X]"
+    pub aliases: Vec<String>,
 }
 
 impl CardDef {
+    /// Has this name (its own or one it is also treated as).
+    pub fn named(&self, n: &str) -> bool {
+        self.name == n || self.aliases.iter().any(|a| a == n)
+    }
     pub fn effect_indexes(&self, timing: Timing) -> impl Iterator<Item = usize> + '_ {
         self.effects.iter().enumerate().filter(move |(_, e)| e.timing == timing).map(|(i, _)| i)
     }
@@ -232,6 +332,8 @@ pub enum Until {
     NextTurn,
     NextEnd,
     Permanent,
+    /// until the end of the effect's controller's next turn
+    YourNextEnd,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -242,6 +344,9 @@ pub enum ModKind {
     Keyword(Kw),
     NoRefresh,
     Negated,
+    /// "set the power / cost to N": later changes still add on top
+    PowerSet(i32),
+    CostSet(i32),
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -17,11 +17,15 @@ if optcg_rs is not None:
 @unittest.skipIf(optcg_rs is None, "optcg_rs not built")
 class Parity(unittest.TestCase):
     def test_compiler_matches_on_every_card(self):
+        """New card text goes into the Rust engine only (its second compiler), so Rust may
+        implement lines Python doesn't; on cards Python implements fully the two must agree."""
         from optcg.carddb import load_cards
         db = rust_db()
         for cid, d in load_cards().items():
-            self.assertEqual(list(d.unimplemented), db.unimplemented(cid), cid)
-            self.assertEqual(len(d.effects), db.effect_count(cid), cid)
+            missing = db.unimplemented(cid)
+            self.assertTrue(set(missing) <= set(d.unimplemented), cid)
+            if not d.unimplemented:
+                self.assertEqual(len(d.effects), db.effect_count(cid), cid)
 
     def test_eb05_decks_match(self):
         """No official deck plays EB05, so these test decks are built around its cards."""

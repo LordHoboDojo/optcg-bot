@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::cards::*;
-use crate::compile::compile_card;
+use crate::compile::compile_card_with;
 use crate::effects::{StaticNum, Statics};
 use crate::scripts::script;
 
@@ -62,11 +62,16 @@ fn strs(j: &Value, k: &str) -> Vec<String> {
 
 fn card_from_json(j: &Value) -> Result<CardDef, String> {
     let (effect, trigger) = (s(j, "effect"), s(j, "trigger"));
-    let comp = compile_card(&effect, &trigger);
     let id = s(j, "id");
+    let sc = script(&id);
+    let scripted = |line: &str| match &sc {
+        Some(sc) => sc.covers.map_or(true, |covers| covers.iter().any(|c| line.contains(c))),
+        None => false,
+    };
+    let comp = compile_card_with(&effect, &trigger, &scripted);
     let category = Category::parse(&s(j, "category")).ok_or_else(|| format!("{id}: bad category"))?;
     let mut d = CardDef {
-        id,
+        id: id.clone(),
         name: s(j, "name"),
         category,
         colors: strs(j, "colors"),
@@ -83,11 +88,28 @@ fn card_from_json(j: &Value) -> Result<CardDef, String> {
             cost: (!comp.static_cost.is_empty()).then(|| StaticNum::Parts(comp.static_cost)),
             keywords: comp.static_keywords,
             hand_cost: comp.hand_cost,
+            gen_replacements: comp.gen_replacements,
+            gen_power: comp.gen_power,
+            gen_base_power: comp.gen_base_power,
+            no_ko_battle_by: comp.no_ko_battle_by,
+            hand_discount: comp.hand_discount,
+            deck_out_at_end: comp.deck_out_at_end,
+            deck_out_wins: comp.deck_out_wins,
+            don_deck_size: comp.don_deck_size,
+            gen_cost: comp.gen_cost,
+            gen_counter: comp.gen_counter,
+            no_ko_effect_by: comp.no_ko_effect_by,
+            play_rested: comp.play_rested,
+            don_phase_to_leader: comp.don_phase_to_leader,
+            faceup_life_to_deck: comp.faceup_life_to_deck,
+            no_own_on_play: comp.no_own_on_play,
+            no_effect_play: comp.no_effect_play,
             ..Statics::default()
         },
         text: effect,
         trigger_text: trigger,
         unimplemented: comp.unimplemented,
+        aliases: comp.aliases,
     };
     if let Some(sc) = script(&d.id) {
         let added = (sc.apply)(&mut d);

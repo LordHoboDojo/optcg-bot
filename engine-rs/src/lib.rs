@@ -4,11 +4,14 @@
 pub mod agents;
 pub mod cards;
 pub mod compile;
+pub mod compile2;
 pub mod db;
 pub mod effects;
 pub mod engine;
+pub mod gen;
 pub mod rng;
 pub mod scripts;
+pub mod scripts2;
 
 use serde_json::{json, Value};
 

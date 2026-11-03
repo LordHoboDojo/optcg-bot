@@ -36,7 +36,8 @@ pub fn script(id: &str) -> Option<Script> {
         "EB05-010" => s(Some(&["When one of your Characters"]), robin_leader),
         "EB05-052" => s(Some(&["If you would take damage"]), gloriosa),
         "EB05-061" => s(Some(&["would be removed from the field by your opponent"]), nami_life),
-        _ => None,
+        // cards only the Rust engine implements
+        _ => crate::scripts2::script2(id),
     }
 }
 
