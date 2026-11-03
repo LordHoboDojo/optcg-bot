@@ -1,6 +1,6 @@
 # Browser tests
 
-End-to-end tests for the site's pages (`site.spec.ts`) and the game table (`table.spec.ts`), in
+End-to-end tests for the site's pages (`site.spec.ts`), the deck builder (`builder.spec.ts`) and the game table (`table.spec.ts`), in
 Chromium with [Playwright](https://playwright.dev). The config builds the pages and starts the real
 server (`python -m optcg.server`) on port 8765 with test settings: dev sign-in, an in-memory
 database, the `greedy` and `random` house bots and two decks. Any JavaScript error in a page fails

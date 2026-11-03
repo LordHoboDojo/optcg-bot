@@ -5,6 +5,7 @@ import Layout from "./components/Layout";
 import Account from "./pages/Account";
 import Analysis from "./pages/Analysis";
 import Bots from "./pages/Bots";
+import DeckBuilder from "./pages/DeckBuilder";
 import Docs from "./pages/Docs";
 import Home from "./pages/Home";
 import NotFound from "./pages/NotFound";
@@ -21,6 +22,7 @@ createRoot(document.getElementById("root")!).render(
           <Route element={<Layout />}>
             <Route index element={<Home />} />
             <Route path="play" element={<Play />} />
+            <Route path="builder" element={<DeckBuilder />} />
             <Route path="analysis" element={<Analysis />} />
             <Route path="account" element={<Account />} />
             <Route path="bots" element={<Bots />} />

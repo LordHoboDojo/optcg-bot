@@ -138,7 +138,35 @@ class Site(unittest.TestCase):
         self.assertIn("analysis", self.c.get("/api/analysis").json())
         self.assertEqual(self.c.get("/api/nope").status_code, 404)
         self.assertIn(self.c.get("/play").status_code, (200, 503))  # 503 when web/dist isn't built
+        self.assertIn(self.c.get("/builder").status_code, (200, 503))
         self.assertIn(self.c.get("/no-such-page").status_code, (404, 503))
+
+    # the deck builder
+
+    def test_card_pool_and_site_decks(self):
+        cards = {c["id"]: c for c in self.c.get("/api/cards").json()["cards"]}
+        self.assertEqual(cards["OP17-039"]["category"], "Leader")
+        self.assertEqual(cards["OP08-051"]["name"], "Buckin")
+        self.assertTrue(cards["OP01-075"]["unlimited"])
+        self.assertFalse(cards["OP08-051"]["unlimited"])
+        d = self.c.get("/api/deck", params={"name": "rocks"}).json()
+        self.assertEqual((d["leader"], sum(d["cards"].values())), ("OP17-039", 50))
+        self.assertEqual(self.c.get("/api/deck", params={"name": "decks/rocks.txt"}).status_code, 404)
+
+    def test_plays_a_built_deck(self):
+        d = self.c.get("/api/deck", params={"name": "rocks"}).json()
+        cards = {**d["cards"], "OP08-051": 3, "OP17-045": 5}  # 5 copies: not allowed
+        game = {"deck": "My Rocks", "bot_deck": "rocks", "bot": "random"}
+        listed = lambda cs: "\n".join([f"1x{d['leader']}"] + [f"{n}x{i}" for i, n in cs.items()])
+        r = self.c.post("/api/games", json={**game, "decklist": listed(cards)})
+        self.assertEqual((r.status_code, r.json()["error"]), (400, "bad_deck"))
+        self.assertIn("5 copies of OP17-045", r.json()["detail"])
+        self.assertEqual(self.c.post("/api/games", json={**game, "deck": " ", "decklist": listed(d["cards"])}).status_code, 400)
+        self.assertEqual(self.c.post("/api/games", json={**game, "decklist": "4xNOPE-001"}).status_code, 400)
+        r = self.c.post("/api/games", json={**game, "decklist": listed(d["cards"])})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.c.get("/api/me").json()["game"]["deck"], "My Rocks")
+        self.assertEqual(self.c.get("/api/state").status_code, 200)
 
     # the bot API
 

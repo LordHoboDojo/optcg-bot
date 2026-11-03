@@ -4,6 +4,7 @@ import { useSession } from "../session";
 
 const NAV = [
   ["/play", "Play"],
+  ["/builder", "Deck builder"],
   ["/analysis", "Analysis"],
   ["/bots", "Your bots"],
   ["/docs/bot-api", "Bot API"],
