@@ -9,8 +9,19 @@ matches are kept in SQLite on a Docker volume.
 
 ```bash
 .venv/bin/pip install -r requirements-server.txt
+(cd web && npm install && npm run build)                    # the pages, into web/dist
 OPTCG_DEV_LOGIN=1 .venv/bin/python -m optcg.server          # http://127.0.0.1:8000
 OPTCG_KEY=optcg_... .venv/bin/python tools/bot_client.py -v  # a key from Your bots
+```
+
+While working on the pages, run `npm run dev` in `web/` as well and open http://127.0.0.1:5173:
+it reloads on every change and passes the API through to the server on :8000.
+
+The Analysis page reads `data/analysis.json`. After training new checkpoints, refresh it
+(about a minute) and commit it:
+
+```bash
+.venv/bin/python tools/analysis.py --games 400
 ```
 
 `OPTCG_DEV_LOGIN=1` adds a "Sign in (dev)" link that needs no Google account. Never set it on a
