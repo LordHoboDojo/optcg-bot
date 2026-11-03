@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { Component, useEffect, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useSession } from "../session";
 
@@ -16,7 +16,9 @@ export function initials(name: string | null | undefined) {
 export default function Layout() {
   const { me } = useSession();
   const { pathname } = useLocation();
-  useEffect(() => window.scrollTo(0, 0), [pathname]);
+  // Braces matter: in newer browsers scrollTo returns a Promise, which React would take as this
+  // effect's cleanup and then try to call on the next page change.
+  useEffect(() => { window.scrollTo(0, 0); }, [pathname]);
   const user = me?.user;
   return (
     <div className="shell">
@@ -38,7 +40,7 @@ export default function Layout() {
           </div>
         </div>
       </header>
-      <main><div className="wrap"><Outlet /></div></main>
+      <main><div className="wrap"><Boundary key={pathname}><Outlet /></Boundary></div></main>
       <footer>
         <div className="wrap">
           <span>OPTCG Bot Arena — a fan-made rules engine and bots for the ONE PIECE Card Game.</span>
@@ -81,4 +83,22 @@ export function SignInPrompt({ what }: { what: string }) {
         : <p className="tiny">Sign-in isn't set up on this server.</p>}
     </div>
   );
+}
+
+/** Shows a message instead of a blank page if a page crashes. Keyed by the path, so moving to
+ * another page starts it fresh. */
+class Boundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error) { console.error(error); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="card empty" style={{ maxWidth: 560, margin: "40px auto" }}>
+        <h3>Something went wrong on this page</h3>
+        <p style={{ marginBottom: 18 }}>Reload to try again. If it keeps happening, the details are in the browser console.</p>
+        <button className="btn primary" onClick={() => window.location.reload()}>Reload</button>
+      </div>
+    );
+  }
 }
