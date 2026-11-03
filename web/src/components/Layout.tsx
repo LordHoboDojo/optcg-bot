@@ -1,6 +1,7 @@
 import { Component, useEffect, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useSession } from "../session";
+import { HakiStrip } from "./Haki";
 
 const NAV = [
   ["/play", "Play"],
@@ -64,6 +65,7 @@ export function PageHead({ title, children, actions }: { title: string; children
   useTitle(title);
   return (
     <div className="page-head">
+      <HakiStrip seed={title.length * 31 + 3} />
       <div><h1>{title}</h1>{children && <p>{children}</p>}</div>
       {actions && <div className="row">{actions}</div>}
     </div>
