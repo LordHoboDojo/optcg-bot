@@ -51,7 +51,7 @@ pub fn snapshot(e: &Eng) -> Value {
                 "leader": field_card(e, ps.leader),
                 "chars": ps.characters.iter().map(|&u| field_card(e, u)).collect::<Vec<_>>(),
                 "stage": ps.stage.map(|u| field_card(e, u)),
-                "hand": ps.hand.iter().map(|&u| json!([u, e.d(u).id, e.cost(u), e.counter_value(u)])).collect::<Vec<_>>(),
+                "hand": ps.hand.iter().map(|&u| json!([u, e.d(u).id, e.cost(u), e.counter_value(u), e.c(u).revealed])).collect::<Vec<_>>(),
                 "deck": ids(&ps.deck),
                 "trash": ids(&ps.trash),
                 "life": ps.life.iter().map(|&u| json!([e.d(u).id, e.c(u).face_up])).collect::<Vec<_>>(),

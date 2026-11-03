@@ -6,6 +6,7 @@ import json
 import re
 from functools import lru_cache
 from pathlib import Path
+from typing import Callable, Sequence
 
 from .cards import CardDef, Category
 from .deck import Deck, DeckError
@@ -108,13 +109,17 @@ def find_deck(name: str, decks: dict[str, Deck] | None = None) -> Deck:
     return decks[hits[0]]
 
 
-def coverage(deck: Deck) -> tuple[int, int, list[str]]:
-    """(implemented effect lines, total effect lines, unimplemented lines) counting every copy."""
+def coverage(deck: Deck, unimplemented: Callable[[CardDef], Sequence[str]] | None = None
+             ) -> tuple[int, int, list[str]]:
+    """(implemented effect lines, total effect lines, unimplemented lines) counting every copy.
+    `unimplemented(card)` is a card's text an engine doesn't carry out; by default the Python
+    engine's (optcg.env.rust_unimplemented is the Rust engine's)."""
     total = done = 0
     missing = []
     for d in [deck.leader, *deck.cards]:
         lines = effect_lines(d.text + "\n" + d.trigger_text)
+        todo = unimplemented(d) if unimplemented else d.unimplemented
         total += len(lines)
-        done += len(lines) - len(d.unimplemented)
-        missing += [f"{d.id} {d.name}: {u}" for u in d.unimplemented]
+        done += len(lines) - len(todo)
+        missing += [f"{d.id} {d.name}: {u}" for u in todo]
     return done, total, missing

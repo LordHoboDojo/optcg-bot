@@ -18,7 +18,7 @@ URL = "/api/bot/v1/play"
 class Site(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        cfg = Config(bots=["random", "greedy"], decks=["sample-red", "sample-green"], house_deck="sample-green",
+        cfg = Config(bots=["random", "greedy"], decks=["rocks", "(Yellow) Charlotte Linlin"], house_deck="(Yellow) Charlotte Linlin",
                      db=":memory:", replays=Path(self.tmp.name), dev_login=True, move_timeout=5)
         self.app = create_app(cfg)
         self.c = TestClient(self.app)
@@ -28,7 +28,7 @@ class Site(unittest.TestCase):
 
     def play(self, c=None, bot="random"):
         c = c or self.c
-        r = c.post("/api/games", json={"deck": "sample-red", "bot_deck": "sample-green", "bot": bot})
+        r = c.post("/api/games", json={"deck": "rocks", "bot_deck": "(Yellow) Charlotte Linlin", "bot": bot})
         self.assertEqual(r.status_code, 200, r.text)
         return c
 
@@ -66,9 +66,9 @@ class Site(unittest.TestCase):
         last = len(self.c.get("/api/state").json()["frames"]) - 1
         self.assertEqual(self.c.post("/api/act", json={"frame": last, "option": 0}).status_code, 200)
         self.assertEqual(self.c.post("/api/act", json={"frame": last, "option": 0}).status_code, 409)
-        for bad in ({"deck": "../etc/passwd", "bot_deck": "sample-green", "bot": "random"},
-                    {"deck": "sample-red", "bot_deck": "sample-green", "bot": "x.pt"},
-                    {"deck": "sample-red", "bot_deck": "sample-green", "bot": "random", "seat": 2}):
+        for bad in ({"deck": "../etc/passwd", "bot_deck": "(Yellow) Charlotte Linlin", "bot": "random"},
+                    {"deck": "rocks", "bot_deck": "(Yellow) Charlotte Linlin", "bot": "x.pt"},
+                    {"deck": "rocks", "bot_deck": "(Yellow) Charlotte Linlin", "bot": "random", "seat": 2}):
             self.assertEqual(self.c.post("/api/games", json=bad).status_code, 400, bad)
 
     def test_cross_site_posts_and_big_bodies_are_refused(self):
@@ -131,7 +131,7 @@ class Site(unittest.TestCase):
 
     def test_options_and_pages(self):
         o = self.c.get("/api/options").json()
-        self.assertEqual([d["name"] for d in o["decks"]], ["sample-red", "sample-green"])
+        self.assertEqual([d["name"] for d in o["decks"]], ["rocks", "(Yellow) Charlotte Linlin"])
         self.assertTrue(all(0 <= d["coverage"] <= 1 and d["leader_id"] for d in o["decks"]))
         self.assertEqual([b["name"] for b in o["bots"]], ["random", "greedy"])
         self.assertIn("analysis", self.c.get("/api/analysis").json())
@@ -150,8 +150,8 @@ class Site(unittest.TestCase):
     def test_bad_start_is_refused(self):
         key = self.key()
         for start in ({"type": "start"}, {"type": "start", "deck": "/etc/passwd"},
-                      {"type": "start", "deck": "sample-red", "opponent": "runs/x.pt"},
-                      {"type": "start", "deck": "sample-red", "seat": 2}):
+                      {"type": "start", "deck": "rocks", "opponent": "runs/x.pt"},
+                      {"type": "start", "deck": "rocks", "seat": 2}):
             with self.connect(key) as ws:
                 ws.send_json(start)
                 self.assertEqual(ws.receive_json()["error"], "bad_request", start)
@@ -159,7 +159,7 @@ class Site(unittest.TestCase):
     def test_plays_a_match_to_the_end(self):
         key = self.key()
         with self.connect(key) as ws:
-            ws.send_json({"type": "start", "deck": "sample-red", "opponent": "greedy", "seat": 1})
+            ws.send_json({"type": "start", "deck": "rocks", "opponent": "greedy", "seat": 1})
             m = ws.receive_json()
             self.assertEqual((m["type"], m["seat"], m["protocol"]), ("match", 1, 1))
             while (msg := ws.receive_json())["type"] == "decision":
@@ -175,7 +175,7 @@ class Site(unittest.TestCase):
         key = self.key()
         for bad in (99, -1, "0", 1.5, True, None):
             with self.connect(key) as ws:
-                ws.send_json({"type": "start", "deck": "sample-red", "seat": 0})
+                ws.send_json({"type": "start", "deck": "rocks", "seat": 0})
                 m, d = ws.receive_json(), ws.receive_json()
                 ws.send_json({"type": "move", "decision": d["decision"], "option": bad})
                 err, over = ws.receive_json(), ws.receive_json()
@@ -186,7 +186,7 @@ class Site(unittest.TestCase):
     def test_stale_and_malformed_messages_dont_end_the_match(self):
         key = self.key()
         with self.connect(key) as ws:
-            ws.send_json({"type": "start", "deck": "sample-red", "seat": 0})
+            ws.send_json({"type": "start", "deck": "rocks", "seat": 0})
             ws.receive_json()
             d = ws.receive_json()
             ws.send_json({"type": "move", "decision": d["decision"] + 1, "option": 0})
@@ -207,7 +207,7 @@ class Site(unittest.TestCase):
         self.app.state.cfg.move_timeout = 0.2
         key = self.key()
         with self.connect(key) as ws:
-            ws.send_json({"type": "start", "deck": "sample-red", "seat": 0})
+            ws.send_json({"type": "start", "deck": "rocks", "seat": 0})
             ws.receive_json(), ws.receive_json()
             self.assertEqual(ws.receive_json()["error"], "timeout")
             self.assertEqual(ws.receive_json()["reason"], "timeout")
@@ -216,7 +216,7 @@ class Site(unittest.TestCase):
         self.app.state.cfg.bot_matches = 1
         key = self.key()
         with self.connect(key) as ws:
-            ws.send_json({"type": "start", "deck": "sample-red", "seat": 0})
+            ws.send_json({"type": "start", "deck": "rocks", "seat": 0})
             ws.receive_json(), ws.receive_json()
             with self.connect(key) as ws2:
                 self.assertEqual(ws2.receive_json()["error"], "too_many_matches")

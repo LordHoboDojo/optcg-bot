@@ -69,7 +69,7 @@ def snapshot(g):
         ps = g.players[p]
         return {"leader": field_card(g, ps.leader), "chars": [field_card(g, c) for c in ps.characters],
                 "stage": field_card(g, ps.stage) if ps.stage else None,
-                "hand": [[c.uid, c.d.id, g.cost(c), g.counter_value(c)] for c in ps.hand],
+                "hand": [[c.uid, c.d.id, g.cost(c), g.counter_value(c), c.revealed] for c in ps.hand],
                 "deck": [c.d.id for c in ps.deck], "trash": [c.d.id for c in ps.trash],
                 "life": [[c.d.id, c.face_up] for c in ps.life],
                 "don": [ps.don_deck, ps.don_active, ps.don_rested]}

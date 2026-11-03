@@ -30,7 +30,7 @@ from typing import Optional
 
 from .actions import Decision
 from .agents import Agent
-from .cards import BLOCKER, DOUBLE_ATTACK, BANISH, RUSH, UNBLOCKABLE, Card, Category
+from .cards import BLOCKER, DOUBLE_ATTACK, BANISH, RUSH, UNBLOCKABLE, Card, CardDef, Category
 from .deck import Deck
 from .engine import Game
 
@@ -148,6 +148,11 @@ def rust_db():
     """The Rust engine's card database, numbered like card_index() for encoding."""
     import optcg_rs
     return optcg_rs.Db(str(Path(__file__).resolve().parent.parent / "data" / "cards.json"), card_index())
+
+
+def rust_unimplemented(d: CardDef) -> list[str]:
+    """The effect text of a card the Rust engine doesn't carry out (for carddb.coverage)."""
+    return rust_db().unimplemented(d.id)
 
 
 def rust_game(decks: tuple[Deck, Deck], seed: Optional[int] = None, fast: bool = True):

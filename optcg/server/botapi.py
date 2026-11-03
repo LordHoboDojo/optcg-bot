@@ -20,6 +20,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
 from ..carddb import DeckError, parse_decklist
 from ..deck import Deck
+from ..replay import first_player
 from ..web import Session
 from .logs import event
 
@@ -173,7 +174,7 @@ class BotMatches:
     def _save_replay(self, match_id: str, s: Session) -> None:
         """The match from the remote bot's seat, for /matches/<id>."""
         g = s.g
-        rep = {**s.data(), "frames": s.frames, "winner": g.winner, "turns": g.turn_number, "first": g.first_player}
+        rep = {**s.data(), "frames": s.frames, "winner": g.winner, "turns": g.turn_number, "first": first_player(s.frames)}
         rep.pop("live", None)
         rep.pop("art", None)
         folder = self.app.state.cfg.replays
