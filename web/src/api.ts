@@ -8,6 +8,12 @@ export type Deck = { name: string; leader: string; leader_id: string; colors: st
 export type HouseBot = { name: string; kind: string; rating: number | null; about: string | null; analysis_name: string | null };
 export type Options = { decks: Deck[]; bots: HouseBot[]; house_deck: string; default_deck: string };
 
+export type Category = "Leader" | "Character" | "Event" | "Stage";
+export type Card = { id: string; name: string; category: Category; colors: string[]; cost: number | null;
+  power: number | null; counter: number | null; life: number | null; types: string[]; attributes: string[];
+  rarity: string; set: string; text: string; trigger: string; unlimited: boolean; art: string | null; full: string | null };
+export type DeckCards = { name: string; leader: string; cards: Record<string, number> };
+
 export type Record_ = { played: number; won: number };
 export type Game = { bot: string; deck: string; bot_deck: string; turns: number; result: "win" | "loss" | "draw";
   reason: string; ended: number };
@@ -48,7 +54,10 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 export const api = {
   me: () => call<Me>("GET", "/api/me"),
   options: () => call<Options>("GET", "/api/options"),
-  newGame: (deck: string, bot_deck: string, bot: string) => call<{ url: string }>("POST", "/api/games", { deck, bot_deck, bot }),
+  newGame: (deck: string, bot_deck: string, bot: string, decklist?: string) =>
+    call<{ url: string }>("POST", "/api/games", { deck, bot_deck, bot, decklist }),
+  cards: () => call<{ cards: Card[] }>("GET", "/api/cards"),
+  deck: (name: string) => call<DeckCards>("GET", `/api/deck?name=${encodeURIComponent(name)}`),
   account: () => call<Account>("GET", "/api/account"),
   rename: (name: string) => call("PATCH", "/api/account", { name }),
   deleteAccount: () => call("DELETE", "/api/account"),
