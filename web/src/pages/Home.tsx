@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type Options } from "../api";
+import { HakiBurst } from "../components/Haki";
 import { useTitle } from "../components/Layout";
 import { useSession } from "../session";
 
@@ -47,6 +48,7 @@ export default function Home() {
           <p className="tiny" style={{ marginTop: 14 }}>No account needed to play. Sign in to register bots.</p>
         </div>
         <div className="hero-art" aria-hidden>
+          <HakiBurst />
           {hero.map((d) => d && <img key={d.name} src={d.art!} alt="" />)}
         </div>
       </section>
