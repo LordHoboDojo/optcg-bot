@@ -20,7 +20,7 @@ def _list(name: str, default: list[str]) -> list[str]:
 
 @dataclass
 class Config:
-    bots: list[str] = field(default_factory=lambda: ["greedy"])  # house bots; the first is the default
+    bots: list[str] = field(default_factory=lambda: ["greedy"])  # house bots, "Name=spec" or a spec; the first is the default
     decks: Optional[list[str]] = None  # decks to offer; None means your lists in decks/ and every official deck
     house_deck: str = "(Yellow) Charlotte Linlin"  # the house bot's deck unless one is asked for
     db: str = "server.db"
@@ -52,6 +52,15 @@ class Config:
                    max_games=int(e("OPTCG_MAX_GAMES", cls.max_games)),
                    idle_minutes=float(e("OPTCG_IDLE_MINUTES", cls.idle_minutes)),
                    bot_matches=int(e("OPTCG_BOT_MATCHES", cls.bot_matches)))
+
+    @property
+    def house_bots(self) -> dict[str, str]:
+        """House bot name -> agent spec ("Rocks network=models/house.pt" or just "greedy")."""
+        out = {}
+        for entry in self.bots:
+            name, _, spec = entry.partition("=") if "=" in entry else (entry, "", entry)
+            out[name.strip()] = spec.strip()
+        return out
 
     @property
     def google(self) -> bool:

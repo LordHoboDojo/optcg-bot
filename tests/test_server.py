@@ -26,19 +26,21 @@ class Site(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def play(self, c=None):
+    def play(self, c=None, bot="random"):
         c = c or self.c
-        r = c.post("/play", data={"deck": "sample-red", "bot_deck": "sample-green", "bot": "random"},
-                   follow_redirects=False)
-        self.assertEqual(r.status_code, 303)
+        r = c.post("/api/games", json={"deck": "sample-red", "bot_deck": "sample-green", "bot": bot})
+        self.assertEqual(r.status_code, 200, r.text)
+        return c
+
+    def login(self, c=None, name="alice"):
+        c = c or self.c
+        c.get(f"/login/dev?name={name}", follow_redirects=False)
         return c
 
     def key(self, name="alice-bot"):
-        self.c.get("/login/dev?name=alice")
-        self.c.post("/bots", data={"name": name})
-        bot = self.app.state.store.bots(self.app.state.store.user("dev:alice", None, None))[-1]
-        page = self.c.post(f"/bots/{bot['id']}/keys").text
-        return page.split('class="key">')[1].split("<")[0]
+        self.login()
+        bot_id = self.c.post("/api/bots", json={"name": name}).json()["id"]
+        return self.c.post(f"/api/bots/{bot_id}/keys").json()["key"]
 
     def connect(self, key):
         return self.c.websocket_connect(URL, headers={"Authorization": f"Bearer {key}"})
@@ -51,7 +53,7 @@ class Site(unittest.TestCase):
         a.post("/api/act", json={"frame": len(sa["frames"]) - 1, "option": 0})
         self.assertEqual(b.get("/api/state").json(), sb)
         self.assertEqual(TestClient(self.app).get("/api/state").status_code, 404)
-        self.assertEqual(TestClient(self.app).get("/game", follow_redirects=False).status_code, 303)
+        self.assertEqual(TestClient(self.app).get("/game", follow_redirects=False).headers["location"], "/play")
         self.assertEqual(a.get("/game").status_code, 200)
 
     def test_bad_requests_get_400_and_stale_moves_409(self):
@@ -64,10 +66,10 @@ class Site(unittest.TestCase):
         last = len(self.c.get("/api/state").json()["frames"]) - 1
         self.assertEqual(self.c.post("/api/act", json={"frame": last, "option": 0}).status_code, 200)
         self.assertEqual(self.c.post("/api/act", json={"frame": last, "option": 0}).status_code, 409)
-        self.assertEqual(self.c.post("/play", data={"deck": "../etc/passwd", "bot_deck": "sample-green",
-                                                    "bot": "random"}).status_code, 400)
-        self.assertEqual(self.c.post("/play", data={"deck": "sample-red", "bot_deck": "sample-green",
-                                                    "bot": "x.pt"}).status_code, 400)
+        for bad in ({"deck": "../etc/passwd", "bot_deck": "sample-green", "bot": "random"},
+                    {"deck": "sample-red", "bot_deck": "sample-green", "bot": "x.pt"},
+                    {"deck": "sample-red", "bot_deck": "sample-green", "bot": "random", "seat": 2}):
+            self.assertEqual(self.c.post("/api/games", json=bad).status_code, 400, bad)
 
     def test_cross_site_posts_and_big_bodies_are_refused(self):
         self.play()
@@ -78,23 +80,64 @@ class Site(unittest.TestCase):
 
     # accounts and keys
 
-    def test_bots_page_needs_sign_in_and_keys_can_be_revoked(self):
-        self.assertEqual(self.c.get("/bots", follow_redirects=False).status_code, 303)
+    def test_bots_need_sign_in_and_keys_can_be_revoked(self):
+        self.assertEqual(self.c.get("/api/bots").status_code, 401)
+        self.assertEqual(self.c.post("/api/bots", json={"name": "abc"}).status_code, 401)
         key = self.key()
         self.assertIsNotNone(self.app.state.store.bot_for_key(key))
-        self.assertIn("alice-bot", self.c.get("/bots").text)
-        self.assertNotIn(key, self.c.get("/bots").text)  # shown once
-        self.assertEqual(self.c.post("/bots", data={"name": "x"}).status_code, 400)
-        kid = self.app.state.store.keys(1)[0]["id"]
-        self.c.post(f"/keys/{kid}/revoke")
+        listed = self.c.get("/api/bots").json()
+        self.assertEqual(listed["bots"][0]["name"], "alice-bot")
+        self.assertNotIn(key, str(listed))  # shown once
+        self.assertEqual(self.c.post("/api/bots", json={"name": "x"}).status_code, 400)
+        self.assertEqual(self.c.post("/api/bots", json={"name": "alice-bot"}).status_code, 400)  # taken
+        kid = listed["bots"][0]["keys"][0]["id"]
+        self.assertEqual(self.c.delete(f"/api/keys/{kid}").status_code, 200)
+        self.assertEqual(self.c.delete(f"/api/keys/{kid}").status_code, 404)
         self.assertIsNone(self.app.state.store.bot_for_key(key))
         self.assertIsNone(self.app.state.store.bot_for_key(key[:-1] + ("A" if key[-1] != "A" else "B")))
 
+    def test_retiring_a_bot_stops_its_keys_and_frees_its_name(self):
+        key = self.key()
+        bot_id = self.c.get("/api/bots").json()["bots"][0]["id"]
+        self.assertEqual(self.c.delete(f"/api/bots/{bot_id}").status_code, 200)
+        self.assertIsNone(self.app.state.store.bot_for_key(key))
+        self.assertEqual(self.c.get("/api/bots").json()["bots"], [])
+        self.assertEqual(self.c.post("/api/bots", json={"name": "alice-bot"}).status_code, 200)
+
     def test_someone_elses_bot_gets_no_key(self):
         self.key()
-        other = TestClient(self.app)
-        other.get("/login/dev?name=mallory")
-        self.assertNotIn('class="key"', other.post("/bots/1/keys").text)
+        other = self.login(TestClient(self.app), "mallory")
+        self.assertEqual(other.post("/api/bots/1/keys").status_code, 404)
+        self.assertEqual(other.delete("/api/bots/1").status_code, 404)
+        self.assertEqual(other.delete("/api/keys/1").status_code, 404)
+
+    def test_account_records_games_and_can_be_renamed_and_deleted(self):
+        self.assertEqual(self.c.get("/api/account").status_code, 401)
+        self.login()
+        self.play()
+        self.c.post("/api/concede", json={})
+        acc = self.c.get("/api/account").json()
+        self.assertEqual(acc["totals"], {"played": 1, "won": 0})
+        self.assertEqual((acc["games"][0]["result"], acc["games"][0]["reason"]), ("loss", "concede"))
+        self.c.post("/api/concede", json={})  # already over: not counted twice
+        self.assertEqual(self.c.get("/api/account").json()["totals"]["played"], 1)
+        self.assertEqual(self.c.patch("/api/account", json={"name": "Al"}).status_code, 200)
+        self.assertEqual(self.c.get("/api/me").json()["user"]["name"], "Al")
+        self.assertEqual(self.c.patch("/api/account", json={"name": " "}).status_code, 400)
+        self.assertEqual(self.app.state.store.house_record()["random"]["people"], {"played": 1, "won": 1})
+        self.assertEqual(self.c.delete("/api/account").status_code, 200)
+        self.assertIsNone(self.c.get("/api/me").json()["user"])
+        self.assertIsNone(self.app.state.store.get_user(1))
+
+    def test_options_and_pages(self):
+        o = self.c.get("/api/options").json()
+        self.assertEqual([d["name"] for d in o["decks"]], ["sample-red", "sample-green"])
+        self.assertTrue(all(0 <= d["coverage"] <= 1 and d["leader_id"] for d in o["decks"]))
+        self.assertEqual([b["name"] for b in o["bots"]], ["random", "greedy"])
+        self.assertIn("analysis", self.c.get("/api/analysis").json())
+        self.assertEqual(self.c.get("/api/nope").status_code, 404)
+        self.assertIn(self.c.get("/play").status_code, (200, 503))  # 503 when web/dist isn't built
+        self.assertIn(self.c.get("/no-such-page").status_code, (404, 503))
 
     # the bot API
 

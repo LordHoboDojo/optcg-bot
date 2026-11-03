@@ -22,6 +22,9 @@ create table if not exists matches (id text primary key, bot_id integer not null
                                     opponent text not null, seat integer not null, decks text not null,
                                     seed integer not null, started real not null, ended real,
                                     winner integer, reason text, turns integer);
+create table if not exists games (id integer primary key, user_id integer references users(id), bot text not null,
+                                  deck text not null, bot_deck text not null, seat integer not null,
+                                  winner integer, reason text not null, turns integer not null, ended real not null);
 """
 
 BOT_NAME = re.compile(r"[A-Za-z0-9_-]{3,32}")
@@ -40,6 +43,8 @@ class Store:
         self.lock = threading.Lock()
         with self.lock, self.db:
             self.db.executescript(SCHEMA)
+            if "retired" not in [r[1] for r in self.db.execute("pragma table_info(bots)")]:
+                self.db.execute("alter table bots add column retired real")  # databases from before retiring
 
     def _all(self, sql: str, args=()) -> list[sqlite3.Row]:
         with self.lock, self.db:
@@ -74,7 +79,7 @@ class Store:
             raise ValueError(f"the name {name!r} is taken") from None
 
     def bots(self, user_id: int) -> list[sqlite3.Row]:
-        return self._all("select * from bots where user_id = ? order by id", (user_id,))
+        return self._all("select * from bots where user_id = ? and retired is null order by id", (user_id,))
 
     def bot(self, bot_id: int) -> Optional[sqlite3.Row]:
         return self._one("select * from bots where id = ?", (bot_id,))
@@ -119,3 +124,62 @@ class Store:
     def matches(self, user_id: int, limit: int = 20) -> list[sqlite3.Row]:
         return self._all("select m.*, b.name as bot from matches m join bots b on b.id = m.bot_id "
                          "where b.user_id = ? order by m.started desc limit ?", (user_id, limit))
+
+    def rename(self, uid: int, name: str) -> None:
+        name = name.strip()
+        if not 1 <= len(name) <= 40:
+            raise ValueError("a name is 1 to 40 characters")
+        self._insert("update users set name = ? where id = ?", (name, uid))
+
+    def delete_user(self, uid: int) -> list[str]:
+        """Remove an account with its bots, keys, matches and games. Returns the match ids, whose
+        replay files the caller deletes."""
+        with self.lock, self.db:
+            bots = "select id from bots where user_id = ?"
+            ids = [r[0] for r in self.db.execute(f"select id from matches where bot_id in ({bots})", (uid,))]
+            self.db.execute(f"delete from matches where bot_id in ({bots})", (uid,))
+            self.db.execute(f"delete from keys where bot_id in ({bots})", (uid,))
+            self.db.execute("delete from bots where user_id = ?", (uid,))
+            self.db.execute("delete from games where user_id = ?", (uid,))
+            self.db.execute("delete from users where id = ?", (uid,))
+        return ids
+
+    def delete_bot(self, bot_id: int, user_id: int) -> bool:
+        """Retire a bot: its keys stop working. Its matches stay in the records."""
+        with self.lock, self.db:
+            if not self.db.execute("select 1 from bots where id = ? and user_id = ? and retired is null",
+                                   (bot_id, user_id)).fetchone():
+                return False
+            self.db.execute("update keys set revoked = ? where bot_id = ? and revoked is null", (time.time(), bot_id))
+            self.db.execute("update bots set retired = ?, name = name || '#' || id where id = ?", (time.time(), bot_id))
+            return True
+
+    def record(self, bot_id: int) -> dict:
+        row = self._one("select count(*) n, sum(winner = seat) won, sum(ended is not null) done from matches "
+                        "where bot_id = ?", (bot_id,))
+        return {"played": row["done"] or 0, "won": row["won"] or 0}
+
+    def add_game(self, user_id: Optional[int], bot: str, deck: str, bot_deck: str, seat: int,
+                 winner: Optional[int], reason: str, turns: int) -> None:
+        """A finished browser game, for the account page and the house bots' record against people."""
+        self._insert("insert into games (user_id, bot, deck, bot_deck, seat, winner, reason, turns, ended) "
+                     "values (?, ?, ?, ?, ?, ?, ?, ?, ?)", (user_id, bot, deck, bot_deck, seat, winner, reason,
+                                                            turns, time.time()))
+
+    def games(self, user_id: int, limit: int = 20) -> list[sqlite3.Row]:
+        return self._all("select * from games where user_id = ? order by ended desc limit ?", (user_id, limit))
+
+    def game_totals(self, user_id: int) -> dict:
+        row = self._one("select count(*) n, sum(winner = seat) won from games where user_id = ?", (user_id,))
+        return {"played": row["n"] or 0, "won": row["won"] or 0}
+
+    def house_record(self) -> dict:
+        """How each house bot has done: against people in the browser and against remote bots."""
+        out: dict = {}
+        for r in self._all("select bot, count(*) n, sum(winner is not null and winner != seat) won "
+                           "from games group by bot"):
+            out.setdefault(r["bot"], {})["people"] = {"played": r["n"], "won": r["won"] or 0}
+        for r in self._all("select opponent, count(*) n, sum(winner is not null and winner != seat) won "
+                           "from matches where ended is not null group by opponent"):
+            out.setdefault(r["opponent"], {})["bots"] = {"played": r["n"], "won": r["won"] or 0}
+        return out

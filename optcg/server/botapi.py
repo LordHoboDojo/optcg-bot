@@ -73,7 +73,7 @@ class BotMatches:
         except ValueError as e:
             return await self._refuse(ws, BAD_REQUEST, "bad_request", str(e))
 
-        s: Session = await asyncio.to_thread(Session, decks, opponent, seat)
+        s: Session = await asyncio.to_thread(Session, decks, st.cfg.house_bots[opponent], seat, None, opponent)
         match_id = secrets.token_hex(8)
         names = [d.leader.name for d in decks]
         st.store.start_match(match_id, bot["id"], opponent, seat, names, s.seed)
@@ -112,9 +112,10 @@ class BotMatches:
         seat = msg.get("seat", secrets.randbelow(2))
         if seat not in (0, 1) or type(seat) is not int:
             raise ValueError("seat is 0 or 1")
-        opponent = msg.get("opponent", st.cfg.bots[0])
-        if opponent not in st.cfg.bots:
-            raise ValueError(f"opponent is one of {st.cfg.bots}")
+        bots = st.cfg.house_bots
+        opponent = msg.get("opponent", next(iter(bots)))
+        if opponent not in bots:
+            raise ValueError(f"opponent is one of {list(bots)}")
         mine, theirs = self._deck(msg.get("deck")), self._deck(msg.get("opponent_deck", st.house_deck))
         return seat, opponent, (mine, theirs) if seat == 0 else (theirs, mine)
 
