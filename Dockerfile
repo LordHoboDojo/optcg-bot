@@ -16,8 +16,11 @@ FROM python:3.10-slim
 # PyTorch is only needed for network bots (.pt, mcts:); set WITH_TORCH=0 for random/greedy only.
 ARG WITH_TORCH=1
 ARG TORCH_VERSION=2.14.1
+RUN pip install --no-cache-dir --upgrade pip
+# torch from PyTorch's CPU-only index; its dependencies from PyPI
 RUN if [ "$WITH_TORCH" = "1" ]; then \
-      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}"; fi
+      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
+        --extra-index-url https://pypi.org/simple "torch==${TORCH_VERSION}"; fi
 COPY requirements-server.txt /tmp/
 RUN pip install --no-cache-dir -r /tmp/requirements-server.txt
 COPY --from=engine /wheels /tmp/wheels
