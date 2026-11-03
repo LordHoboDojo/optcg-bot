@@ -132,7 +132,8 @@ class Site(unittest.TestCase):
     def test_options_and_pages(self):
         o = self.c.get("/api/options").json()
         self.assertEqual([d["name"] for d in o["decks"]], ["rocks", "(Yellow) Charlotte Linlin"])
-        self.assertTrue(all(0 <= d["coverage"] <= 1 and d["leader_id"] for d in o["decks"]))
+        # the games run on the Rust engine, which implements every card
+        self.assertTrue(all(d["coverage"] == 1 and d["leader_id"] for d in o["decks"]))
         self.assertEqual([b["name"] for b in o["bots"]], ["random", "greedy"])
         self.assertIn("analysis", self.c.get("/api/analysis").json())
         self.assertEqual(self.c.get("/api/nope").status_code, 404)

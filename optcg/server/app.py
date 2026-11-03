@@ -15,6 +15,7 @@ import mimetypes
 import secrets
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -26,9 +27,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from pydantic import BaseModel, Field, StrictInt
 from starlette.middleware.sessions import SessionMiddleware
 
-from ..carddb import coverage
-from ..deck import Deck
-from ..play import make_agent
+from ..carddb import DATA, parse_decklist
+from ..deck import Deck, DeckError
+from ..play import coverage, make_agent
 from ..replay import ASSETS, _art_index, art, art_files, page
 from ..web import MAX_BODY, Session
 from .botapi import BotMatches
@@ -40,7 +41,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DOCS = ROOT / "docs" / "bot-api.md"
 ANALYSIS = ROOT / "data" / "analysis.json"
 SITE = ROOT / "web" / "dist"
-PAGES = ("", "play", "account", "bots", "analysis", "docs", "docs/bot-api", "signin")  # the React app's routes
+PAGES = ("", "play", "builder", "account", "bots", "analysis", "docs", "docs/bot-api", "signin")  # the React app's routes
 
 
 @dataclass
@@ -98,6 +99,7 @@ class NewGame(BaseModel):
     bot_deck: str = Field(max_length=200)
     bot: str = Field(max_length=100)
     seat: Optional[StrictInt] = Field(default=None, ge=0, le=1)
+    decklist: Optional[str] = Field(default=None, max_length=8000)  # your own deck from the builder; `deck` is then its name
 
 
 class Named(BaseModel):
@@ -106,6 +108,9 @@ class Named(BaseModel):
 
 def _error(detail: str, status: int = 400, code: str = "bad_request") -> JSONResponse:
     return JSONResponse({"error": code, "detail": detail}, status)
+
+
+UNLIMITED = "any number of this card in your deck"  # as optcg/deck.py reads it
 
 
 def _sha(spec: str) -> Optional[str]:
@@ -139,6 +144,17 @@ def create_app(cfg: Config) -> FastAPI:
         deck_list.append({"name": name, "leader": leader.name, "leader_id": leader.id, "colors": list(leader.colors),
                           "art": f"{art_base}/{index[leader.id]}" if leader.id in index else None,
                           "coverage": round(done / total, 3) if total else 1.0})
+    def card_art(card_id: str) -> tuple[Optional[str], Optional[str]]:
+        """(thumbnail, full size) for a card, if there's art for it."""
+        full = index.get(card_id)
+        if full is None:
+            return None, None
+        small = full.rpartition(".")[0] + "_small.jpg"
+        return f"{art_base}/{small if small in have else full}", f"{art_base}/{full}"
+
+    have = frozenset(files)
+    pool: list[bytes] = []  # the deck builder's card list as JSON, made on the first request
+
     known = {b["sha256"] or b["spec"]: b for b in (analysis or {}).get("bots", [])}
     bot_list = []
     for name, spec in bots.items():
@@ -222,6 +238,27 @@ def create_app(cfg: Config) -> FastAPI:
         default = "rocks" if "rocks" in st.decks else next(iter(st.decks))
         return {"decks": deck_list, "bots": bot_list, "house_deck": st.house_deck, "default_deck": default}
 
+    @app.get("/api/cards")
+    def cards():
+        if not pool:
+            out = []
+            for j in json.loads((DATA / "cards.json").read_text()):
+                thumb, full = card_art(j["id"])
+                out.append({k: j[k] for k in ("id", "name", "category", "colors", "cost", "power", "counter", "life",
+                                              "types", "attributes", "rarity", "set")} |
+                           {"text": j["effect"], "trigger": j["trigger"], "unlimited": UNLIMITED in j["effect"],
+                            "art": thumb, "full": full})
+            pool.append(json.dumps({"cards": out}, separators=(",", ":")).encode())
+        return Response(pool[0], media_type="application/json", headers={"Cache-Control": "max-age=3600"})
+
+    @app.get("/api/deck")
+    def deck_cards(name: str = Query(max_length=200)):
+        """A site deck's cards, for starting a deck in the builder from it."""
+        d = st.decks.get(name)
+        if d is None:
+            return _error("no such deck", 404, "not_found")
+        return {"name": name, "leader": d.leader.id, "cards": dict(Counter(c.id for c in d.cards))}
+
     @app.get("/decks")  # for bot authors: the names the bot API accepts
     def decks():
         return {"decks": list(st.decks), "house_deck": st.house_deck, "bots": list(bots)}
@@ -242,10 +279,20 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.post("/api/games")
     def new_game(request: Request, body: NewGame):
-        if body.deck not in st.decks or body.bot_deck not in st.decks or body.bot not in bots:
+        if (body.decklist is None and body.deck not in st.decks) or body.bot_deck not in st.decks or body.bot not in bots:
             return _error("pick a deck and a bot from the lists")
+        if body.decklist is None:
+            mine = st.decks[body.deck]
+        else:
+            if not body.deck.strip():
+                return _error("name your deck")
+            try:
+                mine = parse_decklist(body.decklist)
+                mine.validate()
+            except DeckError as e:
+                return _error(f"your deck can't be played: {e}", code="bad_deck")
         seat = secrets.randbelow(2) if body.seat is None else body.seat
-        mine, theirs = st.decks[body.deck], st.decks[body.bot_deck]
+        theirs = st.decks[body.bot_deck]
         s = Session((mine, theirs) if seat == 0 else (theirs, mine), bots[body.bot], seat, None, body.bot)
         u = user(request)
         token = st.rooms.add(Room(s, body.deck, body.bot_deck, u["id"] if u else None))
@@ -253,7 +300,8 @@ def create_app(cfg: Config) -> FastAPI:
             return _error("every table is in use; try again in a few minutes", 503, "busy")
         st.rooms.drop(request.session.get("game"))
         request.session["game"] = token
-        event("game_start", bot=body.bot, decks=[body.deck, body.bot_deck], seat=seat, user=u["id"] if u else None)
+        event("game_start", bot=body.bot, decks=[body.deck, body.bot_deck], seat=seat, user=u["id"] if u else None,
+              built=body.decklist is not None)
         return {"ok": True, "url": "/game"}
 
     @app.get("/game", response_class=HTMLResponse)
