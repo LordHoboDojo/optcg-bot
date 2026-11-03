@@ -10,6 +10,7 @@ import logging
 import sys
 
 log = logging.getLogger("optcg.server")
+log.addHandler(logging.NullHandler())  # quiet until setup() (e.g. in tests)
 
 
 class JsonFormatter(logging.Formatter):

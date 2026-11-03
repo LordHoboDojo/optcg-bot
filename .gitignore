@@ -7,3 +7,7 @@ replays/
 StreamingAssets/
 engine-rs/target/
 server.db
+models/*
+!models/.gitkeep
+.env
+art.json

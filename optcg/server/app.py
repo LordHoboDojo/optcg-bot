@@ -13,6 +13,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -31,7 +32,7 @@ from .config import Config
 from .logs import event, log
 from .store import Store
 
-DOCS = __import__("pathlib").Path(__file__).resolve().parents[2] / "docs" / "bot-api.md"
+DOCS = Path(__file__).resolve().parents[2] / "docs" / "bot-api.md"
 
 
 @dataclass
@@ -344,7 +345,7 @@ table { width: 100%; border-collapse: collapse; font-size: 14px; } td, th { text
 code, .key { font-family: ui-monospace, monospace; font-size: 13px; overflow-wrap: anywhere; }
 .key { display: block; padding: 10px; background: var(--bg); border: 1px dashed var(--accent); border-radius: 6px; margin: 8px 0; }
 .error { color: #c0392b; } .muted { color: var(--muted); font-size: 14px; }
-form.inline { display: inline; } .row { display: flex; gap: 8px; align-items: end; } .row label { flex: 1; margin: 0; }
+form.inline { display: inline; } button.link { color: var(--accent); background: none; border: 0; padding: 0; font: inherit; cursor: pointer; } .row { display: flex; gap: 8px; align-items: end; } .row label { flex: 1; margin: 0; }
 """
 
 
