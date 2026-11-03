@@ -6,3 +6,4 @@ runs/
 replays/
 StreamingAssets/
 engine-rs/target/
+server.db

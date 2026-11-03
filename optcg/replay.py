@@ -31,38 +31,53 @@ ASSETS = Path(__file__).resolve().parent.parent / "StreamingAssets"
 
 
 @lru_cache(maxsize=4)
-def _art_index(assets: Path) -> dict[str, str]:
-    """Card id -> full-size image path relative to the assets folder."""
+def art_files(assets: Path = ASSETS) -> tuple[str, ...]:
+    """The images a table can use (card art, card backs, playmats, the table), relative to `assets`.
+    A server whose art lives elsewhere (e.g. on a CDN) keeps this list in a file instead."""
+    if not (assets / "Cards").is_dir():
+        return ()
+    found = [*(assets / "Cards").glob("*/*"), *(assets / "CardBacks").glob("*"),
+             *(assets / "Playmats").glob("*.png"), assets / "background.jpg"]
+    return tuple(sorted(f.relative_to(assets).as_posix() for f in found if f.is_file()))
+
+
+@lru_cache(maxsize=4)
+def _art_index(files: tuple[str, ...]) -> dict[str, str]:
+    """Card id -> full-size image path."""
     out = {}
-    for f in sorted((assets / "Cards").glob("*/*")):
-        if f.suffix in (".png", ".jpg") and not f.stem.endswith("_small"):
-            out.setdefault(f.stem, f.relative_to(assets).as_posix())
+    for f in files:
+        parts = f.split("/")
+        stem, _, ext = parts[-1].rpartition(".")
+        if len(parts) == 3 and parts[0] == "Cards" and ext in ("png", "jpg") and not stem.endswith("_small"):
+            out.setdefault(stem, f)
     return out
 
 
 COLOR_ORDER = ("red", "green", "blue", "purple", "black", "yellow")
 
 
-def _playmat(assets: Path, colors) -> Optional[str]:
+def _playmat(files: frozenset[str], colors) -> Optional[str]:
     """The official playmat for a Leader's colours (Playmats/BlueYellow.png, ...), if there is one."""
     cols = sorted(colors, key=lambda c: COLOR_ORDER.index(c) if c in COLOR_ORDER else 99)
     for name in ("".join(c.title() for c in cols), "".join(c.title() for c in reversed(cols))):
-        if (assets / "Playmats" / f"{name}.png").exists():
+        if f"Playmats/{name}.png" in files:
             return f"Playmats/{name}.png"
     return None
 
 
-def art(replay: dict, assets: Path = ASSETS) -> dict:
-    """Image paths for a replay's cards, card backs, playmats and table, relative to `assets`."""
-    if not (assets / "Cards").is_dir():
+def art(replay: dict, assets: Path = ASSETS, files: Optional[tuple[str, ...]] = None) -> dict:
+    """Image paths for a replay's cards, card backs, playmats and table, relative to `assets`
+    (or taken from `files`, a list made by art_files)."""
+    files = art_files(assets) if files is None else files
+    if not files:
         return {}
-    index = _art_index(assets)
+    index, have = _art_index(files), frozenset(files)
     leaders = [pl.get("id") for pl in replay["players"]]
     return {"cards": {i: index[i] for i in replay["cards"] if i in index},
             "back": "CardBacks/CardBackRegular.png", "don": "Cards/Don/Don.png",
             "donBack": "CardBacks/CardBackDon.png",
-            "mats": [_playmat(assets, replay["cards"][i]["col"]) if i in replay["cards"] else None for i in leaders],
-            "table": "background.jpg" if (assets / "background.jpg").exists() else None}
+            "mats": [_playmat(have, replay["cards"][i]["col"]) if i in replay["cards"] else None for i in leaders],
+            "table": "background.jpg" if "background.jpg" in have else None}
 
 
 def _card(g: Game, c: Card) -> dict:
