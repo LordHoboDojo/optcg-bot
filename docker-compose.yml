@@ -1,14 +1,17 @@
 # The site behind Caddy, which gets and renews the HTTPS certificate for OPTCG_DOMAIN.
 #     cp .env.example .env   # and fill it in
 #     docker compose up -d --build
+# The server runs images built by .github/workflows/deploy.yml instead of building its own.
 services:
   app:
+    image: ${OPTCG_IMAGE:-ghcr.io/lordhobodojo/optcg-bot:latest}
     build: .
     env_file: .env
     environment:
       OPTCG_SECURE_COOKIES: "1"
     volumes:
       - data:/data
+      - ./models:/app/models:ro
     restart: unless-stopped
     # To send the logs to CloudWatch, uncomment (the instance needs an IAM role that may write logs):
     # logging:

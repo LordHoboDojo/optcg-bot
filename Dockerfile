@@ -1,7 +1,7 @@
 # The hosted site (optcg.server). Build from the project folder:
 #     docker build -t optcg .
-# Put the checkpoints the house bots use in models/ first (e.g. cp runs/league/latest.pt models/house.pt)
-# and name them in OPTCG_BOTS (e.g. "greedy;models/house.pt;mcts:models/house.pt").
+# The checkpoints the house bots use aren't in the image: docker-compose.yml mounts models/ at
+# /app/models. Name them in OPTCG_BOTS (e.g. "greedy;models/house.pt;mcts:models/house.pt").
 
 # The Rust engine, as a wheel
 FROM python:3.10-slim AS engine
@@ -39,7 +39,6 @@ COPY optcg optcg
 COPY data data
 COPY decks decks
 COPY docs docs
-COPY models models
 COPY --from=site /web/dist web/dist
 RUN useradd --create-home optcg && mkdir -p /data && chown optcg /data
 USER optcg
