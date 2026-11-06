@@ -3,6 +3,7 @@
 .venv
 .env
 StreamingAssets
+models
 runs
 replays
 engine-rs/target

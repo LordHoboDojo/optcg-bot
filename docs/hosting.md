@@ -45,14 +45,17 @@ public server. Every setting is in `.env.example`.
    ```
    Put a CloudFront distribution in front of the bucket, then set `OPTCG_ART_BASE` to its URL
    and `OPTCG_ART_MANIFEST=/app/models/art.json`.
-5. **The house bots.** Copy the checkpoints into `models/` (for example
-   `cp runs/league/latest.pt models/house.pt`) and name them in `OPTCG_BOTS`.
-6. **Deploy.** Copy the project to the server (or `git pull` there), then:
+5. **The house bots.** Copy the checkpoints into `models/` on the server (for example
+   `scp runs/league/latest.pt server:optcg/models/house.pt`) and name them in `OPTCG_BOTS`. The
+   folder is mounted into the container, so changing a bot takes `docker compose restart app`,
+   not a deploy.
+6. **First deploy.** Copy the project to the server (or `git pull` there), then:
    ```bash
    cp .env.example .env    # fill it in
    docker compose up -d --build
    ```
    Caddy gets the certificate on the first request. `docker compose logs -f app` shows the logs.
+   After this, deploys are automatic (see below).
 7. **Logs** (optional). Give the instance an IAM role allowed to write CloudWatch Logs and
    uncomment the `awslogs` block in `docker-compose.yml`. Each line is a JSON object, so
    CloudWatch Logs Insights can query them, for example:
@@ -60,6 +63,25 @@ public server. Every setting is in `.env.example`.
    fields @timestamp, bot, reason | filter event = "match_over" and reason != "normal"
    ```
    Worth an alarm: `request_failed` (an exception) and `illegal_move` rates.
+
+## Deploys
+
+When CI passes on `main`, `.github/workflows/deploy.yml` builds the image, pushes it to
+`ghcr.io/lordhobodojo/optcg-bot` tagged with the commit, and runs `deploy/deploy.sh` on the
+server. If the new container isn't healthy, or the site doesn't answer through Caddy, the script
+goes back to the image that was running and the workflow fails. Only then does `latest` move.
+
+The site is down for about as long as the new container takes to start, and games in progress
+end, so merging to `main` is what restarts the site.
+
+To go back to an older commit: Actions > Deploy > Run workflow, with that commit's full SHA.
+
+The workflow needs a GitHub environment `production`, limited to protected branches, with:
+
+- `DEPLOY_SSH_KEY`: a private key whose public half is in the server's `authorized_keys`.
+- `DEPLOY_KNOWN_HOSTS`: the server's line(s) from `known_hosts`.
+
+and the variables `DEPLOY_HOST` (`ubuntu@<ip>`) and `SITE_URL`.
 
 ## Backups
 
