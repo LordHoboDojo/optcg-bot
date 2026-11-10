@@ -3,12 +3,23 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { answerDialogs, expect, startGame, test } from "./fixtures";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const over = (page: Page) => page.locator("#mbox h2", { hasText: /^(Victory|Defeat|Draw)$/ });
+
+/** Click if it's still there; the table redraws after every answer, so a button seen a moment
+ * ago may be gone. */
+async function tryClick(loc: Locator): Promise<boolean> {
+  try {
+    await loc.click({ timeout: 2000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Answer the table's decisions until the game ends: always end the turn, and otherwise take the
  * first option offered (no block, no counter, keep the hand). Returns how many answers it gave. */
@@ -16,30 +27,25 @@ async function playToTheEnd(page: Page, limit = 600): Promise<number> {
   let answers = 0;
   while (answers < limit) {
     if (await over(page).isVisible()) return answers;
-    const modal = page.locator("#modal:visible #mbox [data-opt]");
-    if (await modal.count()) {
-      await modal.first().click();
-      answers++;
-      continue;
-    }
     for (const id of ["#skipBot", "#toNow"]) {
-      if (await page.locator(id).isVisible()) await page.locator(id).click();
+      if (await page.locator(id).isVisible()) await tryClick(page.locator(id));
     }
-    const offered = page.locator("#prompt [data-opt]:visible");
-    if (await page.locator("#endturn").isVisible()) {
-      await page.locator("#endturn").click();
-      answers++;
-    } else if (await offered.count()) {
-      // a question with its answers on the prompt (go first or second?)
-      await offered.first().click();
-      answers++;
-    } else if (await page.locator("#allopts").isVisible()) {
-      if (await page.locator("#optlist").isHidden()) await page.locator("#allopts").click();
-      await page.locator("#optlist [data-opt]").first().click({ timeout: 5000 });
-      answers++;
-    } else {
-      await page.waitForTimeout(50); // the bot is playing, or the answer is on its way
+    const choices = [
+      page.locator("#modal:visible #mbox [data-opt]").first(), // a block, a counter, the mulligan...
+      page.locator("#endturn:visible"),
+      page.locator("#prompt [data-opt]:visible").first(), // go first or second?
+      page.locator("#optlist:visible [data-opt]").first(),
+    ];
+    let answered = false;
+    for (const c of choices) {
+      if (await c.count() && await tryClick(c)) {
+        answered = true;
+        break;
+      }
     }
+    if (answered) answers++;
+    else if (await page.locator("#allopts").isVisible()) await tryClick(page.locator("#allopts"));
+    else await page.waitForTimeout(50); // the bot is playing, or the answer is on its way
   }
   throw new Error(`no end of game after ${limit} answers`);
 }

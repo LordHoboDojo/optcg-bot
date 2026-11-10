@@ -9,6 +9,7 @@ pub mod db;
 pub mod effects;
 pub mod engine;
 pub mod gen;
+pub mod lethal;
 pub mod rng;
 pub mod scripts;
 pub mod scripts2;
@@ -234,6 +235,12 @@ mod py {
         fn greedy(&mut self) -> PyResult<usize> {
             let d = self.g.pending.clone().ok_or_else(|| PyValueError::new_err("the game is over"))?;
             Ok(self.g.view(|e| crate::agents::greedy(e, &d)))
+        }
+
+        /// Whether `player` wins before this turn ends whatever the opponent does (lethal.rs):
+        /// (True/False, or None past `budget` positions; positions searched).
+        fn forced_win(&self, player: u8, budget: usize) -> (Option<bool>, usize) {
+            crate::lethal::forced_win(&self.g, player, budget)
         }
 
         fn snapshot_json(&mut self) -> String {
