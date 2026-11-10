@@ -49,7 +49,7 @@ flowchart TB
 | `/bots` | `Bots`: register bots, make and revoke API keys, retire bots, recent matches, the WebSocket URL | `GET /api/bots` | `POST /api/bots`, `POST /api/bots/{id}/keys`, `DELETE /api/keys/{id}`, `DELETE /api/bots/{id}` |
 | `/analysis` | `Analysis`: bot ratings, head-to-head results, training curves, house bots' records (`components/charts.tsx`) | `GET /api/analysis` | |
 | `/docs`, `/docs/bot-api` | `Docs`: `docs/bot-api.md` rendered with `marked` | `GET /api/docs/bot-api` | |
-| `/signin` | `SignIn`: the sign-in button, or "sign-in isn't set up"; `?failed=1` shows an error | session | |
+| `/signin` | `SignIn`: the Google button, a name form for dev sign-in (`/login/dev`), or "sign-in isn't set up"; `?failed=1` shows an error | session | |
 | anything else | `NotFound` | | |
 
 `components/Haki.tsx` draws the decorative "Conqueror's Haki" art from a seeded generator, so
@@ -124,7 +124,7 @@ sequenceDiagram
 | File | Tests |
 |---|---|
 | `fixtures.ts` | `test` with an automatic `errors` fixture: any uncaught exception or `console.error` fails the test (failed resource loads are allowed, since unknown addresses are meant to 404). Helpers: `signIn` (`/login/dev`), `startGame` (`POST /api/games` then `/game`), `answerDialogs` |
-| `site.spec.ts` | The home page links; moving between pages never leaves a blank page; the not-found page; the bot API docs render; the Play page lists, filters and starts a game; `/game` without a game goes back to Play; signed out, Your bots and Account ask you to sign in; signed in, rename, register a bot, make and revoke a key, retire the bot, sign out |
+| `site.spec.ts` | The home page links; moving between pages never leaves a blank page; the not-found page; the bot API docs render; the Play page lists, filters and starts a game; `/game` without a game goes back to Play; signed out, Your bots and Account ask you to sign in, and the dev sign-in button signs you in; signed in, rename, register a bot, make and revoke a key, retire the bot, sign out |
 | `builder.spec.ts` | Build a deck card by card and keep it in the browser; a pasted list and its problems; copy a site deck and play it against a bot; an unfinished deck can't start a game |
 | `table.spec.ts` | A whole game against greedy through the page, always ending the turn and taking the first option, until the table shows Defeat and `/api/state` agrees; conceding ends the game; New game starts a fresh game; the timeline steps back and returns; a recorded replay file plays from start to finish |
 

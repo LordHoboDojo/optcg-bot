@@ -252,21 +252,11 @@ sequenceDiagram
         M-->>B: {"type": "error", "error": "bad_request", "detail": "send a start message after connecting"}
         M->>B: close 4400
     else the start message is wrong
-        Note over M: type not "start", seat not 0 or 1, unknown opponent,<br/>unknown deck name, bad decklist
+        Note over M: not JSON text or over 64 KB, type not "start", seat not 0 or 1,<br/>unknown opponent, unknown deck name, bad decklist
         M-->>B: {"type": "error", "error": "bad_request", "detail": reason}
         M->>B: close 4400
-    else the start message is not JSON text, or is over 64 KB
-        Note over M: _receive raises ValueError, which _match does not catch
-        M--xB: the handler fails: no error message, the socket closes abnormally
     end
 ```
-
-> **Known gap.** A start message that isn't JSON text, or is over 64 KB, is not refused with
-> `bad_request` and close code `4400` the way other bad starts are: the `ValueError` from
-> `_receive` escapes `BotMatches._match` (it only catches a timeout or a disconnect there), so
-> the connection ends with a server error. The bot's match count is still released (`run`'s
-> `finally`). Once a match has started, the same message is answered with `bad_request` and
-> the match goes on.
 
 ### Ending a match early: forfeits
 
@@ -330,8 +320,6 @@ stateDiagram-v2
     Connected --> Refused: bad key (4401) or too many matches (4429)
     Connected --> WaitingStart: authorized
     WaitingStart --> Refused: no start in 30 s, disconnect, bad start (4400)
-    WaitingStart --> Failed: start not JSON or over 64 KB (known gap)
-    Failed --> [*]
     WaitingStart --> Playing: valid start, match recorded, "match" sent
     Playing --> Playing: legal move
     Playing --> Playing: malformed or stale message (error, clock runs)
@@ -390,10 +378,9 @@ sequenceDiagram
 Routes that need an account answer `401 signed_out` without `uid`; the React pages then show a
 sign-in prompt.
 
-> **Note.** With only `OPTCG_DEV_LOGIN=1` (no Google), `/api/me` reports `signin: "dev"` and the
-> site shows a "Sign in (dev)" button, but that button links to `/login`, which redirects back
-> to `/signin` when Google isn't configured. Dev sign-in works by opening
-> `/login/dev?name=<name>` directly, which is what the Playwright tests do.
+With only `OPTCG_DEV_LOGIN=1` (no Google), the site's "Sign in (dev)" buttons go to `/login`,
+which redirects to `/signin`; that page then asks for a name and submits it to
+`/login/dev?name=<name>`.
 
 ## Bots and API keys
 

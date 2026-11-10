@@ -5,6 +5,7 @@ from pathlib import Path
 
 try:
     from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
 
     from optcg.server.app import create_app
     from optcg.server.config import Config
@@ -184,6 +185,13 @@ class Site(unittest.TestCase):
             with self.connect(key) as ws:
                 ws.send_json(start)
                 self.assertEqual(ws.receive_json()["error"], "bad_request", start)
+        for raw in ("not json", "x" * (65 * 1024)):  # not JSON, or too long
+            with self.connect(key) as ws:
+                ws.send_text(raw)
+                self.assertEqual(ws.receive_json()["error"], "bad_request")
+                with self.assertRaises(WebSocketDisconnect) as closed:
+                    ws.receive_json()
+                self.assertEqual(closed.exception.code, 4400)
 
     def test_plays_a_match_to_the_end(self):
         key = self.key()
