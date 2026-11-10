@@ -83,6 +83,16 @@ test.describe("signed out", () => {
     await expect(page.getByRole("heading", { name: "Sign in to see your account" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Sign in (dev)" })).toBeVisible();
   });
+
+  test("the dev sign-in button signs you in", async ({ page }) => {
+    await page.goto("/account");
+    await page.getByRole("link", { name: "Sign in (dev)" }).click();
+    await expect(page).toHaveURL(/\/signin$/);
+    await page.getByRole("textbox", { name: "Name" }).fill("carol");
+    await page.getByRole("button", { name: "Sign in (dev)" }).click();
+    await expect(page).toHaveURL(/\/account$/);
+    await expect(page.getByText("carol").first()).toBeVisible();
+  });
 });
 
 test.describe("signed in", () => {

@@ -69,6 +69,8 @@ class BotMatches:
             start = await asyncio.wait_for(self._receive(ws), START_TIMEOUT)
         except (asyncio.TimeoutError, WebSocketDisconnect):
             return await self._refuse(ws, BAD_REQUEST, "bad_request", "send a start message after connecting")
+        except ValueError as e:  # not JSON text, or too long
+            return await self._refuse(ws, BAD_REQUEST, "bad_request", str(e))
         try:
             seat, opponent, decks = self._read_start(start)
         except ValueError as e:

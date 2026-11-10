@@ -112,6 +112,10 @@ used at all.
 
 ## Layout
 
+[`docs/architecture/`](docs/architecture/README.md) explains how the parts fit together, with
+diagrams: the engine and the card compiler, training and search, the site, its database and its
+deployment.
+
 | File | What it holds |
 |---|---|
 | `optcg/cards.py` | `CardDef` (printed card), `Effect`, `Card` (a card in a game), keywords |
