@@ -318,3 +318,233 @@ fn greedy_counter(e: &Eng, d: &Decision) -> Option<usize> {
     }
     first_max(counters.into_iter().map(|i| (i, value(i))))
 }
+
+// ---------------------------------------------------------------- deck conditioning
+
+/// What the network may know about the decks (optcg/env.py `deck_obs`): `player`'s own list as
+/// embedding indices, Leader first, and the opponent's Leader. Never the opponent's other cards.
+pub fn deck_obs(e: &Eng, player: u8) -> (Vec<u32>, u32) {
+    let own = e.ps(player).leader;
+    let mut deck = vec![e.db.emb[e.c(own).def as usize]];
+    for c in &e.s.cards {
+        if c.owner == player && c.uid != own {
+            deck.push(e.db.emb[c.def as usize]);
+        }
+    }
+    let opp = e.ps(1 - player).leader;
+    (deck, e.db.emb[e.c(opp).def as usize])
+}
+
+/// Coarse names for what a card's compiled effects do (optcg/nn/model.py `card_features`), so a
+/// rarely seen card shares what the network learns from common cards that do the same things.
+/// One token per timing, cost, keyword, action kind and rule the compilers produced.
+pub fn card_tokens(d: &CardDef) -> Vec<String> {
+    use crate::effects::{Body, Tpl, Where};
+    use crate::gen::{Do, Sel, Side, Verb};
+
+    fn variant<T: std::fmt::Debug>(x: &T) -> String {
+        let s = format!("{x:?}");
+        let end = s.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(s.len());
+        s[..end].to_string()
+    }
+    fn verb(v: &Verb) -> String {
+        match v {
+            Verb::Ko | Verb::KoOrToHand | Verb::KoOrRest => "ko",
+            Verb::Rest => "rest",
+            Verb::SetActive => "set_active",
+            Verb::ToHand | Verb::ToHandOrDeck => "to_hand",
+            Verb::ToDeck { .. } => "to_deck",
+            Verb::Trash => "trash",
+            Verb::ToLife { .. } => "to_life",
+            Verb::Power(n, _) | Verb::PowerPer(n, _) => if *n >= 0 { "power_up" } else { "power_down" },
+            Verb::Cost(n, _) => if *n >= 0 { "cost_up" } else { "cost_down" },
+            Verb::BasePower(..) | Verb::PowerSet(..) => "base_power",
+            Verb::CostSet(..) => "cost_down",
+            Verb::Grant(..) => "grant",
+            Verb::Negate(..) => "negate",
+            Verb::Play { .. } | Verb::PlayOrLife => "play",
+            Verb::GiveDon { .. } | Verb::GiveOppDon { .. } => "give_don",
+            Verb::NoRefresh => "no_refresh",
+            Verb::Pick => return String::new(),
+            other => return variant(other).to_lowercase(),
+        }
+        .to_string()
+    }
+    fn tpl(t: &Tpl, out: &mut Vec<String>) {
+        let mut add = |s: &str| out.push(format!("a:{s}"));
+        match t {
+            Tpl::Ko { .. } | Tpl::KoTotal { .. } | Tpl::KoStage { .. } => add("ko"),
+            Tpl::KoOrRest { .. } => {
+                add("ko");
+                add("rest")
+            }
+            Tpl::BottomAll { .. } | Tpl::OppBottoms { .. } => add("to_deck"),
+            Tpl::RestLeaderOrChar { .. } | Tpl::Rest { .. } | Tpl::RestAll | Tpl::RestByLife { .. } => add("rest"),
+            Tpl::NoCharacterPlay | Tpl::CannotAttack { .. } | Tpl::NoBlockerAll { .. } => add("lock"),
+            Tpl::SetActive { .. } => add("set_active"),
+            Tpl::SelfGain { kw, v, .. } => {
+                if *v > 0 {
+                    add("power_up")
+                }
+                if kw.is_some() {
+                    add("grant")
+                }
+            }
+            Tpl::Debuff { cost, .. } | Tpl::DebuffAll { cost, .. } => add(if *cost { "cost_down" } else { "power_down" }),
+            Tpl::GiveAny { v, .. } => add(if *v >= 0 { "power_up" } else { "power_down" }),
+            Tpl::OppLeaderDebuff { .. } => add("power_down"),
+            Tpl::SkipRefresh { .. } => add("no_refresh"),
+            Tpl::Negate { .. } => add("negate"),
+            Tpl::KoOwn { .. } => add("sacrifice"),
+            Tpl::BuffAll { .. } | Tpl::Buff { .. } | Tpl::LeaderBuff { .. } => add("power_up"),
+            Tpl::LeaderBasePower { .. } => add("base_power"),
+            Tpl::ProtectAll { .. } => add("protect"),
+            Tpl::GiveRestedDonTo { .. } | Tpl::GiveRestedDon { .. } => add("give_don"),
+            Tpl::Bounce { to, .. } => add(if *to == Where::Hand { "to_hand" } else { "to_deck" }),
+            Tpl::DrawTrash { .. } => {
+                add("draw");
+                add("trash_hand")
+            }
+            Tpl::Draw { .. } => add("draw"),
+            Tpl::TrashHand { .. } => add("trash_hand"),
+            Tpl::OppTrashes { .. } | Tpl::TrashOppHand { .. } => add("opp_discard"),
+            Tpl::Mill { .. } => add("mill"),
+            Tpl::LifeToHand { opp, .. } => add(if *opp { "opp_life_to_hand" } else { "life_to_hand" }),
+            Tpl::DeckToLife { .. } | Tpl::HandToLife { .. } => add("add_life"),
+            Tpl::AddDon { .. } => add("add_don"),
+            Tpl::SetDonActive { .. } => add("set_don_active"),
+            Tpl::Grant { .. } | Tpl::LeaderKeyword { .. } | Tpl::Unblockable => add("grant"),
+            Tpl::PlaySelf => add("play"),
+            Tpl::ActivateOwn { .. } => add("activate"),
+            Tpl::Look { .. } => add("search"),
+            Tpl::Scry { .. } => add("scry"),
+            Tpl::PlayFrom { trash, .. } => {
+                add("play");
+                if *trash {
+                    add("from_trash")
+                }
+            }
+            Tpl::CharToLife { .. } => add("to_life"),
+            Tpl::TrashToHand { .. } => add("recur"),
+        }
+    }
+    fn act_do(x: &Do) -> String {
+        match x {
+            Do::Draw(_) | Do::DrawUpTo(_) | Do::DrawTo(_) | Do::DrawCount(_) => "draw".into(),
+            Do::Look { .. } => "search".into(),
+            Do::MillCount => "mill".into(),
+            Do::DeckToLife(_) | Do::DeckToLifeLater(_) => "add_life".into(),
+            Do::ReturnDon { .. } | Do::ReturnDonAtLeast(_) => "return_don".into(),
+            Do::Damage(_) | Do::TrashOppLife(_) => "opp_life_trash".into(),
+            other => variant(other).to_lowercase(),
+        }
+    }
+    fn body(b: &Body, cost: bool, out: &mut Vec<String>) {
+        let pre = if cost { "cost:" } else { "a:" };
+        match b {
+            Body::Seq(a, b) | Body::IfDid(a, b) | Body::OppMayElse(a, b) => {
+                body(a, cost, out);
+                body(b, cost, out)
+            }
+            Body::If(_, b) | Body::UnlessOppTrashes(_, b) | Body::Optional(b) => body(b, cost, out),
+            Body::OppMay(b) => {
+                out.push("opp_may".into());
+                body(b, cost, out)
+            }
+            Body::ChooseOne { options, .. } => {
+                out.push("choose_one".into());
+                for (_, b) in options {
+                    body(b, cost, out)
+                }
+            }
+            Body::WithCosts { costs, body: b, .. } => {
+                let c = costs.as_ref();
+                for (on, name) in [
+                    (c.trash.is_some(), "trash_hand"),
+                    (c.reveal.is_some(), "reveal"),
+                    (c.life > 0 || c.life_face_up > 0 || c.life_face_down > 0, "life"),
+                    (c.rest_cards > 0 || c.rest_leader.is_some(), "rest"),
+                    (c.trash_self, "trash_self"),
+                    (c.give_leader_don > 0, "give_don"),
+                    (c.return_active_don > 0, "return_don"),
+                    (c.ko_own.is_some() || c.trash_own.is_some(), "sacrifice"),
+                ] {
+                    if on {
+                        out.push(format!("cost:{name}"));
+                    }
+                }
+                body(b, cost, out)
+            }
+            Body::Pay { costs, body: b, .. } => {
+                for c in costs {
+                    body(&Body::Act(Box::new(c.clone())), true, out)
+                }
+                body(b, cost, out)
+            }
+            Body::T(t) => {
+                let n = out.len();
+                tpl(t, out);
+                if cost {
+                    for s in &mut out[n..] {
+                        *s = s.replacen("a:", "cost:", 1);
+                    }
+                }
+            }
+            Body::Act(a) => {
+                let v = verb(&a.verb);
+                if !v.is_empty() {
+                    out.push(format!("{pre}{v}"));
+                    let opp = matches!(&a.sel, Sel::Cards { side: Side::Opp, .. });
+                    if opp && !cost {
+                        out.push(format!("a:{v}@opp"));
+                    }
+                }
+            }
+            Body::Do(x) => out.push(format!("{pre}{}", act_do(x))),
+            Body::Script(_) => out.push("script".into()),
+            Body::Nothing => {}
+        }
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    for k in &d.keywords {
+        out.push(format!("kw:{k:?}"));
+    }
+    for e in &d.effects {
+        out.push(format!("t:{:?}", e.timing));
+        for (on, name) in [
+            (e.once_per_turn, "once_per_turn"),
+            (e.don_req > 0, "don_req"),
+            (e.your_turn, "your_turn"),
+            (e.opp_turn, "opp_turn"),
+            (e.rest_don > 0, "cost:rest_don"),
+            (e.don_minus > 0, "cost:don_minus"),
+            (e.rest_self, "cost:rest_self"),
+            (e.condition.is_some(), "conditional"),
+        ] {
+            if on {
+                out.push(name.into());
+            }
+        }
+        body(&e.body, false, &mut out);
+    }
+    let st = &d.st;
+    for (on, name) in [
+        (st.power.is_some() || !st.gen_power.is_empty() || !st.gen_base_power.is_empty(), "static:power"),
+        (st.cost.is_some() || !st.gen_cost.is_empty(), "static:cost"),
+        (!st.keywords.is_empty(), "static:keyword"),
+        (!st.hand_cost.is_empty() || !st.hand_discount.is_empty(), "static:hand_cost"),
+        (st.counter.is_some() || st.hand_counter.is_some() || !st.gen_counter.is_empty(), "static:counter"),
+        (st.attack_lock.is_some(), "static:attack_lock"),
+        (!st.replacements.is_empty() || !st.damage_replacements.is_empty() || !st.gen_replacements.is_empty(),
+         "static:replacement"),
+        (!st.no_ko_battle_by.is_empty() || !st.no_ko_effect_by.is_empty(), "static:protect"),
+        (st.deck_out_at_end || st.deck_out_wins || st.don_deck_size.is_some() || st.play_rested
+            || st.don_phase_to_leader || st.faceup_life_to_deck || st.no_own_on_play, "static:rule"),
+    ] {
+        if on {
+            out.push(name.into());
+        }
+    }
+    out
+}

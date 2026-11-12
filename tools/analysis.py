@@ -110,7 +110,7 @@ def main(argv=None) -> None:
             if isinstance(specs[a], str) and not isinstance(specs[b], str):
                 a, b = b, a  # the batched path wants the network first
             t = time.time()
-            win, draw, by_deck = evaluate(pool, args.workers, (MATCHUP,), specs[a], specs[b], 128, args.games,
+            win, draw, by_deck = evaluate(pool, args.workers, (MATCHUP, MATCHUP[::-1]), specs[a], specs[b], 128, args.games,
                                           engine="rust", parallel=16)
             score = win + draw / 2
             results[(a, b)] = {"score": score, "games": args.games}

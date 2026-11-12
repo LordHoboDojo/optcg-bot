@@ -14,38 +14,37 @@ class Matchups(unittest.TestCase):
         from optcg.nn.train import covered_decks, matchups
         self.covered_decks, self.matchups = covered_decks, matchups
 
-    def args(self, league):
-        return argparse.Namespace(league=league, deck0="sample-red", deck1="sample-green")
+    def args(self, league=False, decks=None):
+        return argparse.Namespace(league=league, decks=decks, deck0="sample-red", deck1="sample-green")
 
-    def test_single_matchup_without_league(self):
-        self.assertEqual(self.matchups(self.args(False)), (("sample-red", "sample-green"),))
+    def test_one_matchup_from_both_sides(self):
+        self.assertEqual(self.matchups(self.args()), [("sample-red", "sample-green"), ("sample-green", "sample-red")])
 
-    def test_league_pairs_every_fully_covered_deck(self):
+    def test_league_pairs_every_fully_covered_deck_both_ways(self):
         names = self.covered_decks()
-        pairs = self.matchups(self.args(True))
-        self.assertEqual(len(pairs), len(names) * (len(names) - 1) // 2)
+        pairs = self.matchups(self.args(league=True))
+        self.assertEqual(len(pairs), len(names) * (len(names) - 1))
         self.assertEqual({n for p in pairs for n in p}, set(names))
         self.assertEqual(len(set(pairs)), len(pairs))
 
-    def test_learner_plays_both_sides_of_every_matchup(self):
-        """Each pairing must come up with the learner on either side, or it only learns one deck of it."""
-        from optcg.nn.train import _assign
-        pairs = self.matchups(self.args(True))
-        seats = {}
-        played = set()
-        for seed in range(12 * len(pairs)):
-            matchup, seat = _assign(pairs, seed)
-            seats.setdefault(matchup, set()).add(seat)
-            played.add(matchup[seat])
-        self.assertEqual(set(seats), set(pairs))
-        for matchup, got in seats.items():
-            self.assertEqual(got, {0, 1}, f"{matchup} only ever ran seat {got}")
-        self.assertEqual(played, set(self.covered_decks()))
+    def test_deck_file_gives_every_ordered_matchup_with_mirrors(self):
+        from pathlib import Path
+        path = str(Path(__file__).resolve().parent.parent / "decks" / "league15.txt")
+        pairs = self.matchups(self.args(decks=path))
+        self.assertEqual(len(pairs), 225)
+        self.assertIn(("(Blue) Rocks.D.Xebec", "(Blue) Rocks.D.Xebec"), pairs)
 
-    def test_assignment_is_stable_for_a_seed(self):
-        from optcg.nn.train import _assign
-        pairs = self.matchups(self.args(True))
-        self.assertEqual(_assign(pairs, 41), _assign(pairs, 41))
+    def test_round_robin_covers_both_seats_of_every_matchup(self):
+        """Evaluations must play each matchup from both seats, or one side's first-turn edge sticks."""
+        from optcg.nn.train import _round_robin
+        pairs = self.matchups(self.args(league=True))[:7]
+        jobs = _round_robin(pairs, 4 * len(pairs), 100)
+        self.assertEqual([j[0] for j in jobs], list(range(100, 100 + 4 * len(pairs))))
+        seats = {}
+        for _, mine, theirs, seat, _ in jobs:
+            seats.setdefault((mine, theirs), set()).add(seat)
+        self.assertEqual(set(seats), set(pairs))
+        self.assertTrue(all(s == {0, 1} for s in seats.values()))
 
 
 @unittest.skipIf(torch is None, "PyTorch not installed")
@@ -58,25 +57,30 @@ class BatchedPlay(unittest.TestCase):
         torch.manual_seed(0)
         self.net = PolicyNet(hidden=32).eval()
         self.state = self.net.state_dict()
+        self.config = self.net.config()
         self.engine = "rust" if rust_available() else "python"
-        self.pairs = (("(Blue) Rocks.D.Xebec", "(Yellow) Charlotte Linlin"),)
+        rocks, linlin = "(Blue) Rocks.D.Xebec", "(Yellow) Charlotte Linlin"
+        self.jobs = [(s, rocks, linlin, s % 2, "greedy" if s % 3 else "snap") for s in range(12)]
 
     def test_batched_eval_matches_one_at_a_time(self):
         """Best-move play is deterministic, so batching must not change a single result."""
         from optcg.nn.train import _eval_games
-        seeds = list(range(12))
         for opponent in ("greedy", self.state):
-            one = _eval_games((self.pairs, self.state, opponent, 32, seeds, self.engine, 1))
-            many = _eval_games((self.pairs, self.state, opponent, 32, seeds, self.engine, 8))
+            one = _eval_games((self.jobs, self.state, opponent, self.config, self.engine, 1))
+            many = _eval_games((self.jobs, self.state, opponent, self.config, self.engine, 8))
             self.assertEqual(one, many)
+            self.assertEqual([(m, s) for m, s, _ in one], [((j[1], j[2]), j[3]) for j in self.jobs])
 
     def test_rollouts_record_every_learner_decision(self):
         from optcg.nn.model import collate
         from optcg.nn.train import _rollouts
-        seeds = list(range(6))
-        eps = _rollouts((self.pairs, self.state, 32, ["greedy", self.state], seeds, self.engine, 4))
-        self.assertEqual(len(eps), len(seeds))
-        for e in eps:
+        jobs = self.jobs[:6]
+        eps = _rollouts((jobs, self.state, self.config, {"greedy": "greedy", "snap": self.state}, self.engine, 4))
+        self.assertEqual(len(eps), len(jobs))
+        self.assertEqual([e["opponent"] for e in eps], [j[4] for j in jobs])
+        for e, j in zip(eps, jobs):
+            self.assertEqual(e["matchup"], (j[1], j[2]))
+            self.assertTrue(all(s[0]["player"] == j[3] for s in e["steps"]))  # the learner's own seat
             self.assertIn(e["reward"], (-1.0, 0.0, 1.0))
             obs = [s[0] for s in e["steps"]]
             self.assertTrue(all(0 <= a < len(o["options"]) for o, a, _, _ in e["steps"]))
@@ -89,15 +93,6 @@ class BatchedPlay(unittest.TestCase):
 
 @unittest.skipIf(torch is None, "PyTorch not installed")
 class SelfPlay(unittest.TestCase):
-    def test_greedy_gets_its_share_of_the_games(self):
-        from optcg.nn.train import _opponents
-        snaps = [{"n": i} for i in range(30)]
-        for share in (0.0, 0.25, 0.5):
-            pool = _opponents(snaps, 20, share)
-            self.assertEqual(pool[-20:], snaps[-20:])  # the most recent snapshots
-            self.assertAlmostEqual(pool.count("greedy") / len(pool), share, delta=0.03)
-        self.assertEqual(_opponents([], 20, 0.25), ["greedy"])  # nothing else to play yet
-
     def test_judged_against_a_reference_and_the_best_is_kept(self):
         import tempfile
         from pathlib import Path
@@ -116,6 +111,27 @@ class SelfPlay(unittest.TestCase):
             scores = [torch.load(Path(d) / f"iter{i:04d}.pt", weights_only=False)["eval_vs_reference"]
                       for i in (1, 2)]
             self.assertEqual(best["eval_vs_reference"], max(scores))
+
+    def test_league_smoke_run_writes_matchup_tables(self):
+        """ppo --decks end to end on a 3-deck league: baseline, sampled games, the table, best.pt."""
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from optcg.nn.model import load
+        from optcg.nn.train import main
+        with tempfile.TemporaryDirectory() as d:
+            decks = Path(d) / "decks.txt"
+            decks.write_text("(Blue) Rocks.D.Xebec\n(Yellow) Charlotte Linlin\n(Red) Roronoa Zoro\n")
+            main(["ppo", "--decks", str(decks), "--out", d, "--iters", "2", "--games", "6", "--eval-every", "1",
+                  "--table-games", "2", "--baseline-games", "2", "--snapshot-every", "1", "--workers", "1",
+                  "--device", "cpu", "--hidden", "32"])
+            t = json.loads((Path(d) / "table_latest.json").read_text())
+            self.assertEqual(len(t["win"]), 3)
+            self.assertEqual(t["games"], 18)
+            self.assertIn("mean_edge", t)
+            self.assertTrue((Path(d) / "greedy_baseline.json").is_file())
+            self.assertTrue(load(str(Path(d) / "best.pt")).deck_cond)
 
 
 if __name__ == "__main__":
