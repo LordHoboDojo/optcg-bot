@@ -77,7 +77,9 @@ flowchart TB
 - `card_index()` numbers every card id for the network's embedding table.
 - `encode(game, decision)` (Python engine) and `encode_rust(game)` (`Game.encode()` in Rust)
   give the same observation: `scalars`, `cards` (one row per visible card), `options` (one row
-  per legal option), `decision`, `player`. A policy scores each option row, since the number
+  per legal option), `decision`, `player`, and the deck conditioning: `deck` (the deciding
+  player's own list, Leader first; `Game.deck_obs(player)` in Rust) and `opp_leader`. Never
+  the opponent's list or hand. A policy scores each option row, since the number
   and meaning of options change at every decision.
 - `rust_game(decks, seed, fast=True)` makes an `optcg_rs.Game` from Python `Deck`s, with log
   lines and labels off when `fast`.
@@ -139,7 +141,22 @@ encoder layer so each card sees the board, pools them into "mine" and "theirs", 
 scalars and the decision kind to make a state vector. Each option is encoded from its action
 kind, effect index, acting card and target (taken from the mixed card rows) and scored against
 the state. A value head predicts the final reward. `save` / `load` keep the weights with the
-hidden size and training metadata.
+network's `config()` and training metadata; checkpoints from before `config` load as the
+original network.
+
+`conditioned(hidden)` (what new `imitate` / `ppo` runs build unless `--plain`) adds two things:
+
+- **Card features.** `card_features()` is a fixed table with one row per card: category, colors,
+  cost, power, counter, Life, a [Trigger], and the effect tokens the Rust compilers produce
+  (`Db.card_tokens(id)`, `agents::card_tokens`): one per timing (`t:OnPlay`), cost
+  (`cost:don_minus`), keyword (`kw:Blocker`), action kind (`a:ko`, `a:draw@opp` when it targets
+  the opponent's cards) and static rule. A linear layer of a card's row is added to its id
+  embedding, so a card the network rarely sees still reads like the common cards that do the
+  same things. Tokens on a single card share an `a:other` / `t:other` column. The table is
+  saved in the weights, so later card data or compiler changes don't shift a trained network.
+  Hand-scripted cards (13) only say `script`.
+- **Deck conditioning.** The state vector also gets the player's decklist (the Leader's vector
+  next to the mean of the 50 cards' vectors, through an MLP) and the opponent's Leader.
 
 ## Playing games
 
@@ -189,12 +206,51 @@ flowchart LR
   `--eval-every` iterations it is evaluated against greedy and, with `--reference`, against a
   fixed checkpoint, and `best.pt` keeps the best.
 - **`eval`**: win rate of a checkpoint against an agent or another checkpoint, both seats.
+- **`--decks FILE`**: a multi-deck league (below).
 - **`--league`**: instead of one matchup (Rocks vs Linlin by default), every pairing of the
-  official decks the engine fully implements, sampled per game.
+  official decks the engine fully implements, sampled the same way but with no matchup table.
 - **`nn/distill.py`** (expert iteration): games of the network against itself with search on
   both sides; every searched decision keeps the share of visits each option got and, at the
   end, the result. The network learns to match the visit shares (cross-entropy) and to predict
   the result (value head). Needs the Rust engine.
+
+### The multi-deck league (`--decks`, `nn/league.py`)
+
+`--decks decks/league15.txt` trains one bot on 15 official decks (the file says why each is
+there): 225 ordered matchups (my deck, their deck), mirrors included. Per iteration:
+
+- **Matchups** come from `league.MatchupSampler`. It tracks, per matchup, the learner's
+  decayed win rate against two references: GreedyAgent and the best checkpoint so far. The edge
+  over greedy is that win rate minus greedy's own in the same matchup (greedy vs greedy,
+  `greedy_baseline.json`, played once per deck list), so a matchup that is just bad for my deck
+  isn't mistaken for a weakness. The edge over the best is wins(A vs best B) + wins(B vs best A)
+  - 1, which cancels the decks' strength without extra games. Matchups are drawn by softmax of
+  -edge / `--matchup-temp` (0.1), mixed with a uniform `--matchup-floor` (30%) so every
+  matchup keeps being played. Each matchup-table evaluation feeds the tracker too.
+- **Opponents**: GreedyAgent for `--greedy-share` (25%), the best checkpoint for `--best-share`
+  (10%) once there is one, and otherwise one of the last `--keep` snapshots picked by PFSP
+  (AlphaStar): weight (1 - learner's win rate against it) ** `--pfsp-power` (2), so the
+  snapshots that still beat the learner come up most. Results decay by `--decay` (0.95) per
+  iteration for both.
+- **Evaluation** every `--eval-every`: `--table-games` (8) games per matchup against greedy,
+  same deals as the baseline. It prints the 15 x 15 table of win rates (rows: my deck, columns:
+  greedy's), the mean win rate, the mean edge over greedy and the three smallest edges, and
+  saves it as `table_iter0010.json` / `table_latest.json`. `best.pt` keeps the best mean edge
+  (or, with `--reference`, the best result against it). `tools/matchup_table.py` renders a
+  table (`--edge`, `--html FILE --open`).
+
+The full run (7,200 greedy-vs-greedy baseline games once, about 40 s on 6 workers; then the games per iteration, and 1,800
+per evaluation):
+
+```bash
+.venv/bin/python -m optcg.nn.train imitate --decks decks/league15.txt --hidden 256 --games 6000 --out runs/league15_imitate.pt
+.venv/bin/python -m optcg.nn.train ppo --decks decks/league15.txt --init runs/league15_imitate.pt --out runs/league15 --iters 500 --games 256
+.venv/bin/python -m optcg.nn.train eval runs/league15/best.pt --decks decks/league15.txt --table-games 40 --baseline runs/league15/greedy_baseline.json --table runs/league15/final_table.json
+python3 tools/matchup_table.py runs/league15/final_table.json --edge --html runs/league15/final_table.html --open
+```
+
+`--hidden 256` widens the network (the default is 128); `--init` keeps the checkpoint's own size.
+A `--reference` checkpoint must be the same kind of network as the learner.
 
 ## Search: MCTS with determinization
 

@@ -12,6 +12,8 @@ numbers, so any ML library can turn them into tensors:
     obs["cards"]    one row per visible card: CARD_FIELDS, card ids from `card_index()`
     obs["options"]  one row per legal option: OPTION_FIELDS
     obs["decision"] index of the decision kind in DECISION_KINDS
+    obs["deck"]     the deciding player's own decklist (card ids, Leader first): public to them
+    obs["opp_leader"] the opponent's Leader card id. Never the opponent's other cards or hand.
 
 Options vary in number and meaning at every decision, so a policy should score each option
 row (together with the state) and pick among them, not use a fixed action space.
@@ -129,8 +131,19 @@ def encode(g: Game, d: Decision) -> dict:
                     ps.don_active, ps.don_rested, ps.don_deck, len(ps.characters)]
     scalars += [float(g.turn_player == me), g.turn_number, _index(PHASES, g.phase), float(g.battle is not None)]
 
+    deck, opp_leader = deck_obs(g, me)
     return {"scalars": scalars, "cards": rows, "options": options,
-            "decision": _index(DECISION_KINDS, d.kind), "player": me}
+            "decision": _index(DECISION_KINDS, d.kind), "player": me, "deck": deck, "opp_leader": opp_leader}
+
+
+def deck_obs(g: Game, me: int) -> tuple[list[int], int]:
+    """What a player knows about the decks before the game starts: their own list (card ids,
+    Leader first) and the opponent's Leader, which is face up from the start (5-2-1-2)."""
+    ids = card_index()
+    leader = g.players[me].leader
+    deck = [ids.get(leader.d.id, 0)] + [ids.get(c.d.id, 0) for uid, c in sorted(g.cards.items())
+                                         if c.owner == me and c is not leader]
+    return deck, ids.get(g.players[1 - me].leader.d.id, 0)
 
 
 # ---------------------------------------------------------------- the Rust engine
@@ -169,7 +182,13 @@ def rust_game(decks: tuple[Deck, Deck], seed: Optional[int] = None, fast: bool =
 def encode_rust(g) -> dict:
     """encode() for a Rust game's pending decision; the same numbers."""
     scalars, cards, options, decision, player = g.encode()
-    return {"scalars": scalars, "cards": cards, "options": options, "decision": decision, "player": player}
+    try:
+        deck, opp_leader = g.deck_obs(player)
+    except AttributeError:
+        raise RuntimeError("optcg_rs is older than optcg/env.py: rebuild it "
+                           "(cd engine-rs && maturin develop --release)") from None
+    return {"scalars": scalars, "cards": cards, "options": options, "decision": decision, "player": player,
+            "deck": deck, "opp_leader": opp_leader}
 
 
 def play_rust(decks: tuple[Deck, Deck], agents: tuple[Agent, Agent], seed: Optional[int] = None,

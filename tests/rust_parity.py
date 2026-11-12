@@ -106,8 +106,9 @@ def play_both(decks, seed, policy, rng):
         if not py.over:
             a = encode(py, py.pending)
             sc, cards, opts, dk, pl = rs.encode()
+            deck, opp_leader = rs.deck_obs(pl)
             b = {"scalars": sc, "cards": [list(r) for r in cards], "options": [list(r) for r in opts],
-                 "decision": dk, "player": pl}
+                 "decision": dk, "player": pl, "deck": list(deck), "opp_leader": opp_leader}
             if a != b:
                 raise Mismatch(_diff("encoding", a, b, py, n))
             k = py.pending.options.index(agents[py.pending.player].act(py, py.pending))
