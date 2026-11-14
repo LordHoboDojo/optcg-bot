@@ -133,6 +133,90 @@ class SelfPlay(unittest.TestCase):
             self.assertTrue((Path(d) / "greedy_baseline.json").is_file())
             self.assertTrue(load(str(Path(d) / "best.pt")).deck_cond)
 
+    def test_exploiters_and_nash_ranking_end_to_end(self):
+        """Phase 2 on a 2-deck league: both exploiter kinds play, get promoted into the main agent's
+        pool, members are ranked by the Nash meta-game, and --resume picks all of it up."""
+        import io
+        import json
+        import tempfile
+        from contextlib import redirect_stdout
+        from pathlib import Path
+
+        from optcg.nn.model import conditioned, save
+        from optcg.nn.train import main
+        with tempfile.TemporaryDirectory() as d:
+            torch.manual_seed(0)
+            decks = Path(d) / "decks.txt"
+            decks.write_text("(Blue) Rocks.D.Xebec\n(Yellow) Charlotte Linlin\n", encoding="utf-8")
+            init = str(Path(d) / "init.pt")
+            save(conditioned(32), init)
+            target = Path(d) / "target.json"
+            target.write_text(json.dumps({"decks": ["(Blue) Rocks.D.Xebec", "(Yellow) Charlotte Linlin"],
+                                          "edge": [[0.1, -0.4], [0.0, 0.2]]}), encoding="utf-8")
+            run = ["ppo", "--decks", str(decks), "--init", init, "--out", d, "--games", "4", "--eval-every", "1",
+                   "--table-games", "2", "--baseline-games", "2", "--snapshot-every", "1", "--workers", "1",
+                   "--device", "cpu", "--main-exploiters", "1", "--league-exploiters", "1",
+                   "--exploiter-games", "4", "--exploiter-min-iters", "1", "--promote-at", "0",
+                   "--league-reset", "0", "--exploit-targets", str(target), "--exploit-cells", "2", "--nash", "--nash-games", "2"]
+            out = io.StringIO()
+            with redirect_stdout(out):
+                main(run + ["--iters", "2"])
+            log = out.getvalue()
+            self.assertIn("2 target matchups", log)  # the 2 weakest cells of the 2x2 table
+            self.assertIn("mx1.g1 joins the main agent's opponents", log)
+            self.assertIn("lx1.g2 joins", log)
+            self.assertIn("Nash ranking", log)
+            saved = json.loads((Path(d) / "league.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["copies"], ["mx1.g1", "lx1.g1", "mx1.g2", "lx1.g2"])
+            members = [m for m, _ in saved["meta"]["members"]]
+            self.assertIn("greedy", members)
+            self.assertIn("iter2", members)
+            self.assertIn(saved["best"], members)
+            for f in ("mx1.pt", "lx1.pt", "mx1.g1.pt", "best.pt"):
+                self.assertTrue((Path(d) / f).is_file(), f)
+            self.assertEqual(torch.load(Path(d) / "mx1.pt", weights_only=False)["gen"], 3)
+            out = io.StringIO()
+            with redirect_stdout(out):
+                main(run + ["--iters", "3", "--resume"])
+            log = out.getvalue()
+            self.assertIn("generation 3", log)
+            self.assertIn("mx1.g3 joins", log)
+            self.assertIn("iter 3:", log)
+            saved = json.loads((Path(d) / "league.json").read_text(encoding="utf-8"))
+            self.assertIn("mx1.g3", saved["copies"])
+
+    def test_exploiter_games(self):
+        import argparse
+        import random
+
+        from optcg.nn.model import conditioned
+        from optcg.nn.train import Exploiter
+        args = argparse.Namespace(lr=1e-4, decay=0.95, pfsp_power=2.0, exploit_focus=1.0, exploiter_min_iters=2,
+                                  promote_at=0.7, exploiter_budget=5)
+        net = conditioned(16)
+        state, config = net.state_dict(), net.config()
+        pairings = [(a, b) for a in "xyz" for b in "xyz"]
+        mx = Exploiter("mx1", "main", state, config, "cpu", args)
+        jobs = mx.jobs(random.Random(0), 50, pairings, [("x", "y")], ["iter10"], 7)
+        self.assertEqual({(j[1], j[2]) for j in jobs}, {("y", "x")})  # the opponent's deck vs main's x
+        self.assertEqual({j[4] for j in jobs}, {"main"})
+        self.assertEqual(jobs[0][0], 7)
+        lx = Exploiter("lx1", "league", state, config, "cpu", args)
+        for _ in range(30):
+            lx.pfsp.record("iter10", 1.0)
+        jobs = lx.jobs(random.Random(0), 400, pairings, [], ["iter10", "mx1.g1"], 0)
+        keys = [j[4] for j in jobs]
+        self.assertGreater(keys.count("mx1.g1"), 3 * keys.count("iter10"))
+        self.assertEqual(lx.jobs(random.Random(0), 3, pairings, [], [], 0)[0][4], "main")
+        self.assertFalse(mx.ready())
+        mx.iters = 2
+        mx.rates.record("all", 10, 10)
+        self.assertTrue(mx.ready())
+        mx.rates.counts.clear()
+        self.assertFalse(mx.ready())
+        mx.iters = 5
+        self.assertTrue(mx.ready())
+
     def test_resume_continues_a_run_from_its_files(self):
         """--resume picks up after latest.pt's iteration with its optimizer, the snapshots and the best."""
         import io

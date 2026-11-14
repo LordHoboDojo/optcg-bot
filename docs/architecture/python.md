@@ -255,12 +255,59 @@ flattened out (entropy 0.3 to 1.2) and its edge over greedy fell below zero, whi
 
 To stop a run and carry on later, or on another machine, copy the run directory (at least
 `latest.pt`, `best.pt`, the last `--keep` `iterNNNN.pt` files, `greedy_baseline.json` and
-`table_latest.json`) and run the same `ppo` command with `--resume` in place of `--init`;
+`table_latest.json`) and run the same `ppo` command with `--resume` added (the learner then
+starts from `latest.pt`; `--init` only names the snapshot and league member it started from);
 `--iters` stays the total. The optimizer state, the snapshot pool and the best carry over; the
 matchup sampler restarts from the last table and PFSP from no results.
 
 `--hidden 256` widens the network (the default is 128); `--init` keeps the checkpoint's own size.
 A `--reference` checkpoint must be the same kind of network as the learner.
+
+#### Phase 2: exploiters and the Nash ranking
+
+Phase 1 (the run above) peaked at +12.0% at iteration 450 and slid to +7.0% by iteration 500
+(40-game evaluations: +11.2% against +7.0%), with the weakest matchups clustered in a few decks
+(Kaido, Sanji, Roger, Doflamingo/Lucci). Phase 2 adds AlphaStar's other league roles and a
+PSRO-style meta-solver, so weaknesses get attacked on purpose and the best checkpoint is chosen
+against the whole population instead of greedy alone:
+
+- **Main exploiters** (`--main-exploiters`, `train.Exploiter` kind "main") are separate
+  networks that play only the current main agent, `--exploit-focus` (80%) of their games in its
+  weakest matchups. They take the opponent's deck there; the targets start from
+  `--exploit-targets` (a matchup table, e.g. phase 1's final evaluation) and are replaced by the
+  `--exploit-cells` (10) lowest edges of each new table.
+- **League exploiters** (`--league-exploiters`, kind "league") play the frozen pool (main
+  snapshots and exploiter copies, picked by their own PFSP) in any matchup, hunting weaknesses
+  the whole population shares.
+- **Promotion**: once an exploiter's recent win rate reaches `--promote-at` (70%) after at least
+  `--exploiter-min-iters` (10) iterations, or after `--exploiter-budget` (100) iterations, a frozen
+  copy (`mx1.g1.pt`, `lx1.g1.pt`, ...) joins the main agent's opponents (the last
+  `--keep-exploiters`, 10, alongside its own snapshots, all picked by PFSP) and the exploiter
+  starts a new generation: a main exploiter from `--exploiter-init` (default `--init`), a league
+  exploiter from it with probability `--league-reset` (25%). Each plays `--exploiter-games` (128)
+  games per iteration, learning with the same PPO settings.
+- **Nash ranking** (`--nash`, `league.MetaGame`): every evaluation adds the main agent as a
+  member (`iterN`) next to the starting checkpoint (`init`), promoted exploiter copies and greedy,
+  plays `--nash-games` (64) head-to-head games for each pair that has fewer (random matchups,
+  each played with the decks both ways round so deck strength cancels), and solves the
+  symmetric zero-sum meta-game (`league.nash`, regret matching+). Members are rated by their
+  result against the Nash mixture, as in Nash averaging; `best.pt` is the top main checkpoint,
+  and the main agent's "best" opponent follows it. `--nash-members` (12) caps the population,
+  dropping members the mixture needs least.
+- **`--pool DIR`** starts the snapshot pool from another run's last `--keep` checkpoints, so
+  phase 2 opens against phase 1's later snapshots rather than nobody.
+
+`league.json` holds the exploiter copies, the targets, the meta-game results and the best member,
+and `mx1.pt` / `lx1.pt` the exploiters with their optimizers, so `--resume` picks all of it up.
+
+```bash
+.venv/bin/python -m optcg.nn.train ppo --decks decks/league15.txt --init runs/league15_lr/best.pt --pool runs/league15_lr \
+  --out runs/league15_p2 --iters 300 --games 256 --lr 1e-4 --entropy 0.001 \
+  --main-exploiters 1 --league-exploiters 1 --exploit-targets runs/league15_lr/final_best.json --nash
+```
+
+Each iteration plays 512 games (256 for the main agent, 128 per exploiter) and runs three PPO
+updates; each evaluation adds the 1,800-game table and the new member's head-to-head games.
 
 ## Search: MCTS with determinization
 

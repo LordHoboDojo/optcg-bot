@@ -28,9 +28,17 @@ saves the matchup table (table_latest.json; tools/matchup_table.py renders it):
 
 --resume continues the run in --out from its files, on this machine or another one (copy the
 run directory over): latest.pt (with the optimizer state), the snapshot pool from its iterNNNN.pt
-files, best.pt and the last matchup table. Pass the run's other flags again; --iters is the total:
+files, best.pt, the last matchup table, and the exploiters and meta-game (league.json). Pass the
+run's other flags again; --iters is the total:
 
     .venv/bin/python -m optcg.nn.train ppo --decks decks/league15.txt --out runs/league15 --iters 500 --resume
+
+Phase 2 adds AlphaStar's exploiters and a PSRO-style Nash ranking of league members
+(docs/architecture/python.md has the details):
+
+    .venv/bin/python -m optcg.nn.train ppo --decks decks/league15.txt --init runs/league15_lr/best.pt \
+        --pool runs/league15_lr --out runs/league15_p2 --iters 300 --lr 1e-4 --entropy 0.001 \
+        --main-exploiters 1 --league-exploiters 1 --exploit-targets runs/league15_lr/final_best.json --nash
 
 --league instead pairs every official deck the engine fully implements (on the Rust engine, all
 of them), with no matchup table: too many matchups for one.
@@ -477,6 +485,182 @@ def _advantages(ep, gamma, lam):
     return adv
 
 
+def _ppo_update(net, opt, episodes, args, device) -> tuple[int, float, float]:
+    """One PPO update of `net` on `episodes`; returns the decisions learned from, the last value
+    loss and the last entropy."""
+    obs, acts, old_logp, rets, advs = [], [], [], [], []
+    for ep in episodes:
+        adv = _advantages(ep, 1.0, args.lam)
+        for (o, a, lp, v), A in zip(ep["steps"], adv):
+            obs.append(o)
+            acts.append(a)
+            old_logp.append(lp)
+            advs.append(A)
+            rets.append(A + v)
+    if not obs:
+        return 0, float("nan"), float("nan")
+    acts_t, old_t = torch.tensor(acts, device=device), torch.tensor(old_logp, device=device)
+    adv_t, ret_t = torch.tensor(advs, device=device), torch.tensor(rets, device=device)
+    adv_t = (adv_t - adv_t.mean()) / (adv_t.std() + 1e-8)
+    net.train()
+    idx = list(range(len(obs)))
+    for _ in range(args.epochs):
+        random.shuffle(idx)
+        for i in range(0, len(idx), args.batch):
+            mb = idx[i:i + args.batch]
+            logits, value = net(_to(collate([obs[j] for j in mb]), device))
+            dist = torch.distributions.Categorical(logits=logits)
+            logp = dist.log_prob(acts_t[mb])
+            ratio = (logp - old_t[mb]).exp()
+            a = adv_t[mb]
+            policy_loss = -torch.min(ratio * a, ratio.clamp(1 - args.clip, 1 + args.clip) * a).mean()
+            value_loss = F.mse_loss(value, ret_t[mb])
+            entropy = dist.entropy().mean()
+            loss = policy_loss + 0.5 * value_loss - args.entropy * entropy
+            opt.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+            opt.step()
+    net.eval()
+    return len(obs), value_loss.item(), entropy.item()
+
+
+def _tasks(jobs, state, config, opponents, args) -> list[tuple]:
+    """Rollout tasks for the workers, each carrying only the opponents its own games use."""
+    return [(part, state, config, {k: opponents[k] for k in {j[4] for j in part}}, args.engine, args.parallel)
+            for part in _split(jobs, args.workers)]
+
+
+# ---------------------------------------------------------------- phase 2: exploiters and the Nash ranking
+
+class Exploiter:
+    """A learner that trains to beat the league rather than to play well (AlphaStar's exploiters).
+    A main exploiter ("main") plays only the current main agent, mostly in the main agent's
+    weakest matchups (it takes the opponent's deck there); a league exploiter ("league") plays
+    the frozen pool, main snapshots and exploiter copies, picked by PFSP, in any matchup. When it
+    wins `--promote-at` of its recent games after at least `--exploiter-min-iters` iterations, or
+    its `--exploiter-budget` runs out, a frozen copy joins the main agent's opponents and it starts
+    a new generation: a main exploiter from its initial weights, a league exploiter from them
+    with probability `--league-reset` (otherwise it carries on)."""
+
+    def __init__(self, name: str, kind: str, init_state: dict, config, device, args):
+        self.name, self.kind = name, kind
+        self.init_state, self.config, self.device, self.args = init_state, config, device, args
+        self.gen = 1
+        self.reset()
+
+    def reset(self) -> None:
+        self.net = from_state(self.init_state, self.config).to(self.device)
+        self.opt = torch.optim.Adam(self.net.parameters(), lr=self.args.lr)
+        self.restart()
+
+    def restart(self) -> None:
+        """A new generation's bookkeeping, keeping the weights."""
+        self.iters = 0
+        self.rates = league._Rates(self.args.decay, 4.0)
+        self.pfsp = league.PFSP(power=self.args.pfsp_power, decay=self.args.decay)
+
+    def win_rate(self) -> float:
+        return self.rates.rate("all")
+
+    def ready(self) -> bool:
+        a = self.args
+        return ((self.iters >= a.exploiter_min_iters and self.win_rate() >= a.promote_at)
+                or self.iters >= a.exploiter_budget)
+
+    def copy_name(self) -> str:
+        return f"{self.name}.g{self.gen}"
+
+    def jobs(self, rng: random.Random, n: int, pairings, targets, pool_keys: list[str], seed0: int) -> list[tuple]:
+        jobs = []
+        weights = self.pfsp.weights(pool_keys) if pool_keys else []
+        for i in range(n):
+            if self.kind == "main":
+                theirs, mine = rng.choice(targets) if targets and rng.random() < self.args.exploit_focus \
+                    else rng.choice(pairings)  # the main agent plays the first deck of its weak matchup
+                key = "main"
+            else:
+                mine, theirs = rng.choice(pairings)
+                key = rng.choices(pool_keys, weights=weights)[0] if pool_keys else "main"
+            jobs.append((seed0 + i, mine, theirs, rng.randrange(2), key))
+        return jobs
+
+    def record(self, episodes) -> None:
+        for ep in episodes:
+            score = (ep["reward"] + 1) / 2
+            self.rates.record("all", score)
+            if self.kind == "league":
+                self.pfsp.record(ep["opponent"], score)
+
+    def step(self) -> None:
+        self.rates.step()
+        self.pfsp.step()
+
+    def save(self, path: Path, **meta) -> None:
+        save(self.net, str(path), kind=self.kind, gen=self.gen, iters=self.iters, rates=self.rates.counts,
+             pfsp=self.pfsp.rates.counts, optimizer=_to_cpu(self.opt.state_dict()), **meta)
+
+    def load(self, path: Path) -> None:
+        ck = torch.load(path, map_location="cpu", weights_only=False)
+        self.net = from_state(ck["state"], ck["config"]).to(self.device)
+        self.opt = torch.optim.Adam(self.net.parameters(), lr=self.args.lr)
+        self.opt.load_state_dict(ck["optimizer"])
+        for g in self.opt.param_groups:
+            g["lr"] = self.args.lr
+        self.gen, self.iters = ck["gen"], ck["iters"]
+        self.rates.counts, self.pfsp.rates.counts = ck["rates"], ck["pfsp"]
+
+
+def play_pairs(pool, args, pairs, specs: dict, config, pairings, games: int, seed0: int) -> dict:
+    """Head-to-head games for each (a, b) in `pairs` (specs: name -> weights or 'greedy'; `a` must
+    be a network): `games` games in random matchups, each played with the decks both ways round so
+    deck strength cancels, seats alternating. Returns {(a, b): [a's score, games]}."""
+    rng = random.Random(seed0)
+    tasks, owners = [], []
+    for a, b in pairs:
+        jobs = []
+        for k in range(max(1, games // 2)):
+            x, y = rng.choice(pairings)
+            s = seed0 + 2 * len(owners) * games + 2 * k
+            jobs += [(s, x, y, k % 2, "b"), (s + 1, y, x, 1 - k % 2, "b")]
+        for part in _split(jobs, args.workers):
+            tasks.append((part, specs[a], specs[b], config, args.engine, args.parallel))
+            owners.append((a, b))
+    out = {p: [0.0, 0] for p in pairs}
+    for owner, part in zip(owners, pool.map(_eval_games, tasks) if tasks else []):
+        for _, _, score in part:
+            out[owner][0] += score
+            out[owner][1] += 1
+    return out
+
+
+def _fill_meta(pool, args, meta: league.MetaGame, specs: dict, config, pairings, seed0: int) -> int:
+    """Play every pair of members that has fewer than --nash-games games; returns the games played."""
+    pairs = []
+    for i, a in enumerate(meta.members):
+        for b in meta.members[i + 1:]:
+            if meta.games(a, b) < args.nash_games:
+                pairs.append((a, b) if specs[a] != "greedy" else (b, a))
+    if not pairs:
+        return 0
+    res = play_pairs(pool, args, pairs, specs, config, pairings, args.nash_games, seed0)
+    for (a, b), (s, n) in res.items():
+        meta.record(a, b, s, n)
+    return sum(n for _, n in res.values())
+
+
+def _pool_snapshots(run: Path, keep: int) -> dict:
+    """The last `keep` iterNNNN.pt checkpoints of another run, as snapshot opponents."""
+    files = sorted(run.glob("iter[0-9][0-9][0-9][0-9].pt"))[-keep:]
+    if not files:
+        raise SystemExit(f"--pool: no iterNNNN.pt checkpoints in {run}")
+    return {f"pool.{f.stem}": torch.load(f, map_location="cpu", weights_only=False)["state"] for f in files}
+
+
+def _save_state(state: dict, config, path: Path, **meta) -> None:
+    save(from_state(state, config), str(path), **meta)
+
+
 def ppo(args) -> None:
     if not 0 <= args.greedy_share < 1 or not 0 <= args.best_share < 1 or args.greedy_share + args.best_share >= 1:
         raise SystemExit("--greedy-share and --best-share must be at least 0 and add up to less than 1")
@@ -499,9 +683,14 @@ def ppo(args) -> None:
     if args.decks and not net.deck_cond:
         print("note: this network doesn't read the decklists (an older checkpoint, or --plain)", flush=True)
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
-    snapshots: dict[str, dict] = {}  # self-play from the start
+    init_state = None
     if args.init:
-        snapshots["init"] = load(args.init).state_dict() if args.resume else _cpu_state(net)
+        init_state = load(args.init).state_dict() if args.resume else _cpu_state(net)
+    snapshots: dict[str, dict] = {}  # self-play from the start
+    if init_state is not None:
+        snapshots["init"] = init_state
+    if args.pool:
+        snapshots.update(_pool_snapshots(Path(args.pool), args.keep))
     if args.resume:
         snapshots.update(saved)
         if opt_state is not None:
@@ -519,10 +708,69 @@ def ppo(args) -> None:
         if ref.config() != config:
             raise SystemExit(f"--reference is a different network ({ref.config()}) from the learner ({config})")
         reference = ref.state_dict()
+
+    # phase 2: exploiters, their frozen copies, and the Nash meta-game over league members
+    ex_init = load(args.exploiter_init).state_dict() if args.exploiter_init else \
+        init_state if init_state is not None else _cpu_state(net)
+    exploiters = ([Exploiter(f"mx{i + 1}", "main", ex_init, config, device, args) for i in range(args.main_exploiters)]
+                  + [Exploiter(f"lx{i + 1}", "league", ex_init, config, device, args)
+                     for i in range(args.league_exploiters)])
+    copies: dict[str, dict] = {}
+    targets: list[tuple[str, str]] = []
+    if args.exploit_targets:
+        t = json.loads(Path(args.exploit_targets).read_text(encoding="utf-8"))
+        targets = [m for m in league.weakest(t, args.exploit_cells) if m in pairings]
+    meta = league.MetaGame() if args.nash else None
+    specs: dict[str, object] = {"greedy": "greedy"}
+    best_name = None
+    if meta is not None:
+        meta.add("greedy", "greedy")
+        if init_state is not None:
+            meta.add("init", "main")
+            specs["init"] = init_state
+            best_name, best_state = "init", init_state
+            if not args.resume:  # the starting checkpoint is the best until a main checkpoint outranks it
+                _save_state(init_state, config, out / "best.pt", best="init", iteration=0)
+    saved_league = out / "league.json"
+    if args.resume and saved_league.exists():
+        sl = json.loads(saved_league.read_text(encoding="utf-8"))
+        for name in sl.get("copies", []):
+            copies[name] = torch.load(out / f"{name}.pt", map_location="cpu", weights_only=False)["state"]
+        targets = [tuple(m) for m in sl.get("targets", targets)]
+        for ex in exploiters:
+            if (out / f"{ex.name}.pt").exists():
+                ex.load(out / f"{ex.name}.pt")
+        if meta is not None and sl.get("meta"):
+            meta = league.MetaGame.from_json(sl["meta"])
+            for m in list(meta.members):
+                if m == "greedy":
+                    continue
+                f = out / (f"iter{int(m[4:]):04d}.pt" if m.startswith("iter") else f"{m}.pt")
+                if m in copies:
+                    specs[m] = copies[m]
+                elif m == "init" and init_state is not None:
+                    specs[m] = init_state
+                elif f.exists():
+                    specs[m] = torch.load(f, map_location="cpu", weights_only=False)["state"]
+                else:
+                    meta.remove(m)
+            if sl.get("best") in specs:
+                best_name, best_state = sl["best"], specs[sl["best"]]
+    if exploiters:
+        print(f"exploiters: {', '.join(f'{e.name} ({e.kind}, generation {e.gen})' for e in exploiters)}; "
+              f"{len(targets)} target matchups", flush=True)
+
     sampler = league.MatchupSampler(pairings, floor=args.matchup_floor, temp=args.matchup_temp, decay=args.decay)
     pfsp = league.PFSP(power=args.pfsp_power, decay=args.decay)
     rng = random.Random(args.seed + 1_000_003 * start)
-    seed = args.seed + start * args.games
+    per_iter = args.games + args.exploiter_games * len(exploiters)
+    seed = args.seed + start * per_iter
+
+    def save_league():
+        saved_league.write_text(json.dumps({
+            "copies": list(copies), "targets": [list(m) for m in targets], "best": best_name,
+            "meta": meta.to_json() if meta is not None else None}), encoding="utf-8")
+
     with _pool(args.workers) as pool:
         baseline = None
         if tables:
@@ -541,15 +789,27 @@ def ppo(args) -> None:
             state = _cpu_state(net)
             sampler.step()
             pfsp.step()
+            for ex in exploiters:
+                ex.step()
             snaps = dict(list(snapshots.items())[-args.keep:])
+            snaps.update(list(copies.items())[-args.keep_exploiters:])
             jobs = assign_games(rng, args.games, sampler, snaps, pfsp, args.greedy_share, best_state is not None,
                                 args.best_share, seed)
             seed += args.games
             opponents = {"greedy": "greedy", **snaps}
             if best_state is not None:
                 opponents["best"] = best_state
-            episodes = [e for part in pool.map(_rollouts, [(j, state, config, opponents, args.engine, args.parallel)
-                                                           for j in _split(jobs, args.workers)]) for e in part]
+            groups = [_tasks(jobs, state, config, opponents, args)]
+            for ex in exploiters:
+                ex_jobs = ex.jobs(rng, args.exploiter_games, pairings, targets, list(snaps), seed)
+                seed += args.exploiter_games
+                groups.append(_tasks(ex_jobs, _cpu_state(ex.net), config, {"main": state, **snaps}, args))
+            played = pool.map(_rollouts, [task for g in groups for task in g])
+            per_group, k = [], 0
+            for g in groups:
+                per_group.append([e for part in played[k:k + len(g)] for e in part])
+                k += len(g)
+            episodes = per_group[0]
             t_play = time.time() - t
             for ep in episodes:
                 score = (ep["reward"] + 1) / 2
@@ -557,53 +817,46 @@ def ppo(args) -> None:
                 if ep["opponent"] in snaps:
                     pfsp.record(ep["opponent"], score)
 
-            obs, acts, old_logp, rets, advs = [], [], [], [], []
-            for ep in episodes:
-                adv = _advantages(ep, 1.0, args.lam)
-                for (o, a, lp, v), A in zip(ep["steps"], adv):
-                    obs.append(o)
-                    acts.append(a)
-                    old_logp.append(lp)
-                    advs.append(A)
-                    rets.append(A + v)
-            acts_t, old_t = torch.tensor(acts, device=device), torch.tensor(old_logp, device=device)
-            adv_t, ret_t = torch.tensor(advs, device=device), torch.tensor(rets, device=device)
-            adv_t = (adv_t - adv_t.mean()) / (adv_t.std() + 1e-8)
-
-            net.train()
-            idx = list(range(len(obs)))
-            for _ in range(args.epochs):
-                random.shuffle(idx)
-                for i in range(0, len(idx), args.batch):
-                    mb = idx[i:i + args.batch]
-                    logits, value = net(_to(collate([obs[j] for j in mb]), device))
-                    dist = torch.distributions.Categorical(logits=logits)
-                    logp = dist.log_prob(acts_t[mb])
-                    ratio = (logp - old_t[mb]).exp()
-                    a = adv_t[mb]
-                    policy_loss = -torch.min(ratio * a, ratio.clamp(1 - args.clip, 1 + args.clip) * a).mean()
-                    value_loss = F.mse_loss(value, ret_t[mb])
-                    entropy = dist.entropy().mean()
-                    loss = policy_loss + 0.5 * value_loss - args.entropy * entropy
-                    opt.zero_grad()
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
-                    opt.step()
-            net.eval()
-
+            n_obs, value_loss, entropy = _ppo_update(net, opt, episodes, args, device)
             by_opp: dict[str, list[float]] = {}
             for ep in episodes:
-                kind = ep["opponent"] if ep["opponent"] in ("greedy", "best") else "snapshots"
+                o = ep["opponent"]
+                kind = o if o in ("greedy", "best") else "exploiters" if o in copies else "snapshots"
                 by_opp.setdefault(kind, []).append(ep["reward"])
             rates = ", ".join(f"vs {k} {sum(r > 0 for r in v) / len(v):.0%} ({len(v)})" for k, v in sorted(by_opp.items()))
-            print(f"iter {it}: {len(obs)} decisions, play {t_play:.0f}s, learn {time.time() - t - t_play:.0f}s | "
-                  f"{rates} | value loss {value_loss.item():.3f}, entropy {entropy.item():.2f}", flush=True)
+            print(f"iter {it}: {n_obs} decisions, play {t_play:.0f}s, learn {time.time() - t - t_play:.0f}s | "
+                  f"{rates} | value loss {value_loss:.3f}, entropy {entropy:.2f}", flush=True)
+
+            for ex, eps in zip(exploiters, per_group[1:]):
+                t_ex = time.time()
+                ex.record(eps)
+                n_ex, _, ent = _ppo_update(ex.net, ex.opt, eps, args, device)
+                ex.iters += 1
+                won = sum(e["reward"] > 0 for e in eps) / max(1, len(eps))
+                print(f"  {ex.copy_name()} ({ex.kind} exploiter, iteration {ex.iters}): won {won:.0%} of {len(eps)} "
+                      f"(recent {ex.win_rate():.0%}), {n_ex} decisions, learn {time.time() - t_ex:.0f}s, "
+                      f"entropy {ent:.2f}", flush=True)
+                if ex.ready():
+                    name = ex.copy_name()
+                    copies[name] = _cpu_state(ex.net)
+                    _save_state(copies[name], config, out / f"{name}.pt", promoted_at=it, win_rate=ex.win_rate())
+                    if meta is not None:
+                        meta.add(name, "exploiter")
+                        specs[name] = copies[name]
+                    print(f"  {name} joins the main agent's opponents (recent win rate {ex.win_rate():.0%}, "
+                          f"{ex.iters} iterations)", flush=True)
+                    ex.gen += 1
+                    if ex.kind == "main" or rng.random() < args.league_reset:
+                        ex.reset()
+                    else:
+                        ex.restart()
+                ex.save(out / f"{ex.name}.pt", iteration=it)
 
             save(net, str(out / "latest.pt"), matchups=pairings, iteration=it, optimizer=_to_cpu(opt.state_dict()))
             if it % args.snapshot_every == 0:
                 snapshots[f"iter{it}"] = _cpu_state(net)
             if it % args.eval_every == 0 or it == args.iters:
-                meta = dict(matchups=pairings, iteration=it)
+                info = dict(matchups=pairings, iteration=it)
                 if tables:
                     tbl, res = table_eval(pool, args, decks, _cpu_state(net), config, baseline, it)
                     for m, (s, n) in res.items():
@@ -613,8 +866,10 @@ def ppo(args) -> None:
                     print(f"  eval vs greedy, every matchup ({args.table_games} games each):", flush=True)
                     _print_table(tbl, indent="    ")
                     win = tbl["mean_win"]
-                    meta.update(eval_vs_greedy=win, mean_edge=tbl["mean_edge"])
+                    info.update(eval_vs_greedy=win, mean_edge=tbl["mean_edge"])
                     score = tbl["mean_edge"]
+                    if any(ex.kind == "main" for ex in exploiters):
+                        targets = league.weakest(tbl, args.exploit_cells)
                 else:
                     win, draw, by_deck = evaluate(pool, args.workers, pairings, _cpu_state(net), "greedy",
                                                   config, args.eval_games, args.engine, args.parallel)
@@ -622,7 +877,7 @@ def ppo(args) -> None:
                           f"draws {draw:.1%}", flush=True)
                     if len(pairings) > 2:
                         _report(by_deck, indent="      ")
-                    meta["eval_vs_greedy"] = win
+                    info["eval_vs_greedy"] = win
                     score = win
                 if reference is not None:
                     score, draw, by_deck = evaluate(pool, args.workers, pairings, _cpu_state(net), reference,
@@ -631,14 +886,34 @@ def ppo(args) -> None:
                           f"draws {draw:.1%}", flush=True)
                     if len(pairings) > 2:
                         _report(by_deck, indent="      ")
-                    meta["eval_vs_reference"] = score
-                save(net, str(out / f"iter{it:04d}.pt"), **meta)
-                if score > best:
+                    info["eval_vs_reference"] = score
+                save(net, str(out / f"iter{it:04d}.pt"), **info)
+                if meta is not None:
+                    name = f"iter{it}"
+                    meta.add(name, "main")
+                    specs[name] = _cpu_state(net)
+                    t_nash = time.time()
+                    n_games = _fill_meta(pool, args, meta, specs, config, pairings, 5_000_000 + it * 100_000)
+                    for m in meta.prune(args.nash_members, {"greedy", name, best_name}):
+                        specs.pop(m, None)
+                    sol = meta.solve()
+                    print(f"  Nash ranking ({len(meta.members)} members, {n_games} games, "
+                          f"{time.time() - t_nash:.0f}s): {meta.format()}", flush=True)
+                    top = meta.ranking("main")[0]
+                    if top != best_name:
+                        best_name, best_state = top, specs[top]
+                        sampler.reset("best")
+                        _save_state(best_state, config, out / "best.pt", **info, best=top,
+                                    nash_rating=sol[top][1], nash_weight=sol[top][0])
+                        print(f"  new best: {top} ({out / 'best.pt'})", flush=True)
+                elif score > best:
                     best = score
                     best_state = _cpu_state(net)
                     sampler.reset("best")
-                    save(net, str(out / "best.pt"), **meta)
+                    save(net, str(out / "best.pt"), **info)
                     print(f"  new best: {out / 'best.pt'} (iteration {it})", flush=True)
+            if exploiters or meta is not None:
+                save_league()
 
 
 def eval_cmd(args) -> None:
@@ -747,6 +1022,35 @@ def main(argv=None) -> None:
     p.add_argument("--eval-every", type=int, default=10)
     p.add_argument("--eval-games", type=int, default=200)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--pool", help="a previous run's directory: its last --keep iterNNNN.pt checkpoints start the "
+                                  "snapshot pool (e.g. with --init that run's best.pt)")
+    x = p.add_argument_group("phase 2: exploiters and the Nash ranking")
+    x.add_argument("--main-exploiters", type=int, default=0,
+                   help="learners that play only the current main agent, mostly in its weakest matchups")
+    x.add_argument("--league-exploiters", type=int, default=0,
+                   help="learners that play the frozen pool (snapshots and exploiter copies), picked by PFSP")
+    x.add_argument("--exploiter-games", type=int, default=128, help="games per exploiter per iteration")
+    x.add_argument("--exploiter-init", help="checkpoint exploiters start (and restart) from; default --init")
+    x.add_argument("--exploit-targets", help="a matchup table JSON (e.g. a final eval of --init) whose lowest-edge "
+                                             "matchups the main exploiters start on; later tables replace them")
+    x.add_argument("--exploit-cells", type=int, default=10, help="how many of the weakest matchups to target")
+    x.add_argument("--exploit-focus", type=float, default=0.8,
+                   help="share of a main exploiter's games in the target matchups (the rest: any matchup)")
+    x.add_argument("--promote-at", type=float, default=0.7,
+                   help="an exploiter's recent win rate at which a frozen copy joins the main agent's opponents")
+    x.add_argument("--exploiter-min-iters", type=int, default=10, help="iterations before an exploiter can be promoted")
+    x.add_argument("--exploiter-budget", type=int, default=100,
+                   help="iterations after which an exploiter is promoted and restarted anyway")
+    x.add_argument("--league-reset", type=float, default=0.25,
+                   help="chance a promoted league exploiter restarts from its initial weights")
+    x.add_argument("--keep-exploiters", type=int, default=10,
+                   help="how many recent exploiter copies stay in the main agent's opponent pool")
+    x.add_argument("--nash", action="store_true",
+                   help="rank league members (main checkpoints at each eval, exploiter copies, greedy) by the Nash "
+                        "equilibrium of their head-to-head results, and keep the top main checkpoint as best.pt")
+    x.add_argument("--nash-games", type=int, default=64, help="head-to-head games per pair of league members")
+    x.add_argument("--nash-members", type=int, default=12,
+                   help="league members kept in the meta-game; the least needed in the Nash mixture go first")
     p.set_defaults(fn=ppo)
 
     p = sub.add_parser("eval")
