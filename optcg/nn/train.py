@@ -362,7 +362,7 @@ def greedy_baseline(pool, workers, decks, per, engine, parallel, cache: Path | N
     pairings = league.ordered_matchups(decks)
     key = {"decks": decks, "games": per, "engine": engine}
     if cache and cache.is_file():
-        saved = json.loads(cache.read_text())
+        saved = json.loads(cache.read_text(encoding="utf-8"))
         if saved.get("key") == key:
             return {(a, b): v for a, b, v in saved["results"]}
     t = time.time()
@@ -370,7 +370,7 @@ def greedy_baseline(pool, workers, decks, per, engine, parallel, cache: Path | N
     print(f"greedy baseline: {per} games x {len(pairings)} matchups in {time.time() - t:.0f}s", flush=True)
     if cache:
         cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps({"key": key, "results": [[a, b, v] for (a, b), v in res.items()]}))
+        cache.write_text(json.dumps({"key": key, "results": [[a, b, v] for (a, b), v in res.items()]}), encoding="utf-8")
     return res
 
 
@@ -531,7 +531,7 @@ def ppo(args) -> None:
             sampler.set_baseline({k: s / n for k, (s, n) in baseline.items()})
             last = out / "table_latest.json"
             if args.resume and last.exists():  # the last table's results, as if just measured
-                t = json.loads(last.read_text())
+                t = json.loads(last.read_text(encoding="utf-8"))
                 for a, row in zip(t["decks"], t["win"]):
                     for b, w in zip(t["decks"], row):
                         if w is not None and (a, b) in pairings:

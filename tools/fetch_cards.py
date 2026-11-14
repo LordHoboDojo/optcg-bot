@@ -107,7 +107,7 @@ def main() -> None:
             all_cards[c["id"]] = c
         print(f"{name[:60]:60} {len(new):4} new cards", file=sys.stderr)
     cards = sorted(all_cards.values(), key=lambda c: c["id"])
-    (DATA / "cards.json").write_text(json.dumps(cards, indent=1, ensure_ascii=False))
+    (DATA / "cards.json").write_text(json.dumps(cards, indent=1, ensure_ascii=False), encoding="utf-8")
     print(f"wrote {len(cards)} cards", file=sys.stderr)
 
     index = fetch("/feature/deck/")
@@ -121,7 +121,7 @@ def main() -> None:
             continue
         deck["source"] = f"{BASE}/feature/deck/{p}"
         decks.append(deck)
-    (DATA / "decks.json").write_text(json.dumps(decks, indent=1, ensure_ascii=False))
+    (DATA / "decks.json").write_text(json.dumps(decks, indent=1, ensure_ascii=False), encoding="utf-8")
     print(f"wrote {len(decks)} decks", file=sys.stderr)
 
 

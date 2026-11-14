@@ -122,11 +122,11 @@ class SelfPlay(unittest.TestCase):
         from optcg.nn.train import main
         with tempfile.TemporaryDirectory() as d:
             decks = Path(d) / "decks.txt"
-            decks.write_text("(Blue) Rocks.D.Xebec\n(Yellow) Charlotte Linlin\n(Red) Roronoa Zoro\n")
+            decks.write_text("(Blue) Rocks.D.Xebec\n(Yellow) Charlotte Linlin\n(Red) Roronoa Zoro\n", encoding="utf-8")
             main(["ppo", "--decks", str(decks), "--out", d, "--iters", "2", "--games", "6", "--eval-every", "1",
                   "--table-games", "2", "--baseline-games", "2", "--snapshot-every", "1", "--workers", "1",
                   "--device", "cpu", "--hidden", "32"])
-            t = json.loads((Path(d) / "table_latest.json").read_text())
+            t = json.loads((Path(d) / "table_latest.json").read_text(encoding="utf-8"))
             self.assertEqual(len(t["win"]), 3)
             self.assertEqual(t["games"], 18)
             self.assertIn("mean_edge", t)
@@ -143,7 +143,7 @@ class SelfPlay(unittest.TestCase):
         from optcg.nn.train import main
         with tempfile.TemporaryDirectory() as d:
             decks = Path(d) / "decks.txt"
-            decks.write_text("(Blue) Rocks.D.Xebec\n(Yellow) Charlotte Linlin\n")
+            decks.write_text("(Blue) Rocks.D.Xebec\n(Yellow) Charlotte Linlin\n", encoding="utf-8")
             run = ["ppo", "--decks", str(decks), "--out", d, "--games", "4", "--eval-every", "1",
                    "--table-games", "2", "--baseline-games", "2", "--snapshot-every", "1", "--workers", "1",
                    "--device", "cpu", "--hidden", "32"]

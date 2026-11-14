@@ -31,7 +31,7 @@ from pathlib import Path
 
 def read_decks(path: str | Path) -> list[str]:
     """Deck names from a deck file: one per line; '#' starts a comment, blank lines are skipped."""
-    names = [line.split("#", 1)[0].strip() for line in Path(path).read_text().splitlines()]
+    names = [line.split("#", 1)[0].strip() for line in Path(path).read_text(encoding="utf-8").splitlines()]
     names = [n for n in names if n]
     if len(names) < 2:
         raise ValueError(f"{path}: a league needs 2 or more decks, found {len(names)}")
@@ -202,4 +202,4 @@ def summary(t: dict) -> str:
 
 def save_table(t: dict, path: str | Path) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(t, indent=1))
+    Path(path).write_text(json.dumps(t, indent=1), encoding="utf-8")

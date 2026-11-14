@@ -79,7 +79,7 @@ def card_feature_names() -> list[str]:
 @lru_cache(maxsize=1)
 def _card_feature_table() -> tuple[list[str], torch.Tensor]:
     from ..env import rust_available, rust_db
-    raw = {c["id"]: c for c in json.loads((Path(__file__).resolve().parents[2] / "data" / "cards.json").read_text())}
+    raw = {c["id"]: c for c in json.loads((Path(__file__).resolve().parents[2] / "data" / "cards.json").read_text(encoding="utf-8"))}
     ids = card_index()
     tokens: dict[str, list[str]] = {}
     if rust_available():

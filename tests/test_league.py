@@ -31,12 +31,12 @@ class DeckFile(unittest.TestCase):
     def test_comments_and_blank_lines_are_skipped(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "decks.txt"
-            p.write_text("# a league\n\nA   # first\nB\n  # nothing\nC\n")
+            p.write_text("# a league\n\nA   # first\nB\n  # nothing\nC\n", encoding="utf-8")
             self.assertEqual(read_decks(p), ["A", "B", "C"])
-            p.write_text("A\nA\n")
+            p.write_text("A\nA\n", encoding="utf-8")
             with self.assertRaises(ValueError):
                 read_decks(p)
-            p.write_text("A\n")
+            p.write_text("A\n", encoding="utf-8")
             with self.assertRaises(ValueError):
                 read_decks(p)
 
@@ -155,12 +155,12 @@ class Table(unittest.TestCase):
         t = table(decks, {m: [1, 2] for m in ordered_matchups(decks)}, {m: [1, 2] for m in ordered_matchups(decks)})
         with tempfile.TemporaryDirectory() as d:
             p, h = Path(d) / "t.json", Path(d) / "t.html"
-            p.write_text(json.dumps(t))
+            p.write_text(json.dumps(t), encoding="utf-8")
             out = io.StringIO()
             with redirect_stdout(out):
                 matchup_table.main([str(p), "--edge", "--html", str(h)])
             self.assertIn("mean edge over greedy +0.0%", out.getvalue())
-            self.assertIn("<table>", h.read_text())
+            self.assertIn("<table>", h.read_text(encoding="utf-8"))
 
 
 @unittest.skipIf(torch is None, "PyTorch not installed")

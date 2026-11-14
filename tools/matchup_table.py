@@ -56,14 +56,14 @@ def main(argv=None) -> None:
     ap.add_argument("--html", help="also write a colored HTML table here")
     ap.add_argument("--open", action="store_true", help="open the HTML table in a browser")
     args = ap.parse_args(argv)
-    t = json.loads(Path(args.table).read_text())
+    t = json.loads(Path(args.table).read_text(encoding="utf-8"))
     key = "edge" if args.edge else "win"
     if key not in t:
         raise SystemExit(f"{args.table} has no {key!r} table (it was saved without a greedy baseline)")
     print(summary(t))
     print(format_table(t, key))
     if args.html:
-        Path(args.html).write_text(to_html(t, key))
+        Path(args.html).write_text(to_html(t, key), encoding="utf-8")
         print(f"wrote {args.html}")
         if args.open:
             webbrowser.open(Path(args.html).resolve().as_uri())

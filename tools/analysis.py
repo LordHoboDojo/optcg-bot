@@ -52,7 +52,7 @@ def curves(log: Path) -> dict:
     """Win rate against greedy while training (sampled moves) and at each evaluation (best move)."""
     out = {"train": [], "eval": []}
     it = 0
-    for line in log.read_text().splitlines():
+    for line in log.read_text(encoding="utf-8").splitlines():
         if m := ITER.match(line):
             it = int(m.group(1))
             out["train"].append([it, int(m.group(2)) / 100])
@@ -128,7 +128,7 @@ def main(argv=None) -> None:
         "pairs": [{"a": a, "b": b, **{k: v for k, v in res.items() if k != "score"}} for (a, b), res in results.items()],
         "runs": [{"name": n, "about": d, **curves(ROOT / log)} for n, log, d in RUNS if (ROOT / log).is_file()],
     }
-    args.out.write_text(json.dumps(out, indent=1))
+    args.out.write_text(json.dumps(out, indent=1), encoding="utf-8")
     print(f"ratings: {', '.join(f'{n} {r}' for n, r in sorted(elo.items(), key=lambda x: -x[1]))}")
     print(f"-> {args.out} in {out['seconds']}s")
 

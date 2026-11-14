@@ -181,7 +181,7 @@ class BotMatches:
         rep.pop("art", None)
         folder = self.app.state.cfg.replays
         folder.mkdir(parents=True, exist_ok=True)
-        (folder / f"{match_id}.json").write_text(json.dumps(rep, separators=(",", ":")))
+        (folder / f"{match_id}.json").write_text(json.dumps(rep, separators=(",", ":")), encoding="utf-8")
 
     @staticmethod
     async def _receive(ws: WebSocket):

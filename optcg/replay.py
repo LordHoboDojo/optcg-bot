@@ -211,7 +211,7 @@ def to_html(replay: dict, out_dir: Optional[Path] = None, assets: Path = ASSETS)
 def page(data: dict) -> str:
     """The viewer with `data` inside it."""
     blob = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
-    return VIEWER.read_text().replace("/*REPLAY_DATA*/null", blob)
+    return VIEWER.read_text(encoding="utf-8").replace("/*REPLAY_DATA*/null", blob)
 
 
 def main(argv=None) -> None:
@@ -229,7 +229,7 @@ def main(argv=None) -> None:
     rep = record(decks, (make_agent(args.p0), make_agent(args.p1)), args.seed, names=(args.p0, args.p1))
     out = Path(args.out or f"replays/{args.seed}.html")
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(to_html(rep, out.parent))
+    out.write_text(to_html(rep, out.parent), encoding="utf-8")
     result = "draw" if rep["winner"] is None else f"player {rep['winner']} ({rep['players'][rep['winner']]['leader']}) wins"
     print(f"{len(rep['frames'])} frames, {rep['turns']} turns, {result}: {out}")
     if args.open:

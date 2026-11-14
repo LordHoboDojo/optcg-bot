@@ -133,7 +133,7 @@ def create_app(cfg: Config) -> FastAPI:
     for spec in bots.values():
         make_agent(spec)  # fail at startup, not on the first game, if a house bot can't load
     matches = BotMatches(app)
-    analysis = json.loads(ANALYSIS.read_text()) if ANALYSIS.is_file() else None
+    analysis = json.loads(ANALYSIS.read_text(encoding="utf-8")) if ANALYSIS.is_file() else None
 
     # What the Play page shows: each deck's Leader and art, and each house bot's rating if the analysis has it
     index = _art_index(tuple(files)) if files else {}
@@ -242,7 +242,7 @@ def create_app(cfg: Config) -> FastAPI:
     def cards():
         if not pool:
             out = []
-            for j in json.loads((DATA / "cards.json").read_text()):
+            for j in json.loads((DATA / "cards.json").read_text(encoding="utf-8")):
                 thumb, full = card_art(j["id"])
                 out.append({k: j[k] for k in ("id", "name", "category", "colors", "cost", "power", "counter", "life",
                                               "types", "attributes", "rarity", "set")} |
@@ -269,7 +269,7 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.get("/api/docs/bot-api", response_class=PlainTextResponse)
     def bot_docs():
-        return DOCS.read_text() if DOCS.is_file() else "See docs/bot-api.md in the project."
+        return DOCS.read_text(encoding="utf-8") if DOCS.is_file() else "See docs/bot-api.md in the project."
 
     @app.get("/bot-api", include_in_schema=False)
     def bot_docs_page():
@@ -522,7 +522,7 @@ def create_app(cfg: Config) -> FastAPI:
         f = cfg.replays / f"{match_id}.json"
         if not match_id.isalnum() or not f.is_file():
             return PlainTextResponse("no such match", 404)
-        rep = json.loads(f.read_text())
+        rep = json.loads(f.read_text(encoding="utf-8"))
         if a := art(rep, files=st.art_files):
             rep["art"] = {**a, "base": art_base}
         return page(rep)
@@ -547,10 +547,10 @@ def create_app(cfg: Config) -> FastAPI:
             return FileResponse(SITE / path)
         if path not in PAGES:
             return HTMLResponse(_shell("Not found"), 404) if not (SITE / "index.html").is_file() else \
-                HTMLResponse((SITE / "index.html").read_text(), 404)
+                HTMLResponse((SITE / "index.html").read_text(encoding="utf-8"), 404)
         if not (SITE / "index.html").is_file():
             return HTMLResponse(_shell("The site isn't built: run npm run build in web/"), 503)
-        return HTMLResponse((SITE / "index.html").read_text(), headers={"Cache-Control": "no-cache"})
+        return HTMLResponse((SITE / "index.html").read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache"})
 
     return app
 
