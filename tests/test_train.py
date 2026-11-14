@@ -133,6 +133,36 @@ class SelfPlay(unittest.TestCase):
             self.assertTrue((Path(d) / "greedy_baseline.json").is_file())
             self.assertTrue(load(str(Path(d) / "best.pt")).deck_cond)
 
+    def test_resume_continues_a_run_from_its_files(self):
+        """--resume picks up after latest.pt's iteration with its optimizer, the snapshots and the best."""
+        import io
+        import tempfile
+        from contextlib import redirect_stdout
+        from pathlib import Path
+
+        from optcg.nn.train import main
+        with tempfile.TemporaryDirectory() as d:
+            decks = Path(d) / "decks.txt"
+            decks.write_text("(Blue) Rocks.D.Xebec\n(Yellow) Charlotte Linlin\n")
+            run = ["ppo", "--decks", str(decks), "--out", d, "--games", "4", "--eval-every", "1",
+                   "--table-games", "2", "--baseline-games", "2", "--snapshot-every", "1", "--workers", "1",
+                   "--device", "cpu", "--hidden", "32"]
+            main(run + ["--iters", "2"])
+            ck = torch.load(Path(d) / "latest.pt", weights_only=False)
+            self.assertEqual(ck["iteration"], 2)
+            self.assertIn("state", ck["optimizer"])
+            out = io.StringIO()
+            with redirect_stdout(out):
+                main(run + ["--iters", "3", "--resume"])
+            log = out.getvalue()
+            self.assertIn("after iteration 2: 2 snapshots", log)
+            self.assertIn("saved optimizer state", log)
+            self.assertNotIn("iter 1:", log)
+            self.assertIn("iter 3:", log)
+            self.assertEqual(torch.load(Path(d) / "latest.pt", weights_only=False)["iteration"], 3)
+            with self.assertRaises(SystemExit):
+                main(run + ["--iters", "3", "--resume"])
+
 
 if __name__ == "__main__":
     unittest.main()

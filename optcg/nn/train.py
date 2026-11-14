@@ -26,6 +26,12 @@ saves the matchup table (table_latest.json; tools/matchup_table.py renders it):
     .venv/bin/python -m optcg.nn.train ppo --decks decks/league15.txt --init runs/league15_imitate.pt --out runs/league15
     .venv/bin/python -m optcg.nn.train eval runs/league15/best.pt --decks decks/league15.txt --table runs/league15/table.json
 
+--resume continues the run in --out from its files, on this machine or another one (copy the
+run directory over): latest.pt (with the optimizer state), the snapshot pool from its iterNNNN.pt
+files, best.pt and the last matchup table. Pass the run's other flags again; --iters is the total:
+
+    .venv/bin/python -m optcg.nn.train ppo --decks decks/league15.txt --out runs/league15 --iters 500 --resume
+
 --league instead pairs every official deck the engine fully implements (on the Rust engine, all
 of them), with no matchup table: too many matchups for one.
 
@@ -234,6 +240,40 @@ def _device(name: str) -> torch.device:
 def _cpu_state(net) -> dict:
     """A copy of the weights for the worker processes, which play on the CPU."""
     return {k: v.detach().cpu().clone() for k, v in net.state_dict().items()}
+
+
+def _to_cpu(x):
+    """Tensors anywhere in a (nested) dict or list moved to the CPU, so a checkpoint loads on any device."""
+    if torch.is_tensor(x):
+        return x.detach().cpu()
+    if isinstance(x, dict):
+        return {k: _to_cpu(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return type(x)(_to_cpu(v) for v in x)
+    return x
+
+
+def _saved_run(out: Path, args, tables: bool):
+    """What --resume picks up from a run directory: the iteration latest.pt was saved at, its
+    optimizer state (None in checkpoints from before --resume), the snapshot pool rebuilt from the
+    iterNNNN.pt files, and the best checkpoint with the score it was kept for."""
+    latest = out / "latest.pt"
+    if not latest.exists():
+        raise SystemExit(f"--resume: {latest} doesn't exist")
+    ck = torch.load(latest, map_location="cpu", weights_only=False)
+    it = ck.get("iteration", 0)
+    snapshots = {}
+    for n in range(args.snapshot_every, it + 1, args.snapshot_every):
+        f = out / f"iter{n:04d}.pt"
+        if f.exists():
+            snapshots[f"iter{n}"] = torch.load(f, map_location="cpu", weights_only=False)["state"]
+    best_state, best = None, float("-inf")
+    if (out / "best.pt").exists():
+        b = torch.load(out / "best.pt", map_location="cpu", weights_only=False)
+        key = "eval_vs_reference" if args.reference else "mean_edge" if tables else "eval_vs_greedy"
+        if b.get(key) is not None:
+            best_state, best = b["state"], b[key]
+    return it, ck.get("optimizer"), snapshots, best_state, best
 
 
 def _to(batch: dict, device) -> dict:
@@ -448,12 +488,31 @@ def ppo(args) -> None:
     if len(pairings) > 2:
         print(f"league of {len(decks)} decks, {len(pairings)} matchups", flush=True)
     device = _device(args.device)
-    net = (load(args.init) if args.init else _new_net(args)).to(device)
+    start, opt_state = 0, None
+    if args.resume:
+        start, opt_state, saved, best_state, best = _saved_run(out, args, tables)
+        net = load(str(out / "latest.pt")).to(device)
+    else:
+        net = (load(args.init) if args.init else _new_net(args)).to(device)
+        best_state, best = None, float("-inf")
     config = net.config()
     if args.decks and not net.deck_cond:
         print("note: this network doesn't read the decklists (an older checkpoint, or --plain)", flush=True)
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
-    snapshots: dict[str, dict] = {"init": _cpu_state(net)} if args.init else {}  # self-play from the start
+    snapshots: dict[str, dict] = {}  # self-play from the start
+    if args.init:
+        snapshots["init"] = load(args.init).state_dict() if args.resume else _cpu_state(net)
+    if args.resume:
+        snapshots.update(saved)
+        if opt_state is not None:
+            opt.load_state_dict(opt_state)
+            for g in opt.param_groups:  # the command line's --lr wins over the saved one
+                g["lr"] = args.lr
+        print(f"resuming {out} after iteration {start}: {len(saved)} snapshots, "
+              f"{'the best at ' + format(best, '+.1%') if best_state is not None else 'no best yet'}, "
+              f"{'saved' if opt_state is not None else 'fresh'} optimizer state", flush=True)
+        if start >= args.iters:
+            raise SystemExit(f"--resume: the run is already at iteration {start}; raise --iters")
     reference = None
     if args.reference:
         ref = load(args.reference)
@@ -462,16 +521,22 @@ def ppo(args) -> None:
         reference = ref.state_dict()
     sampler = league.MatchupSampler(pairings, floor=args.matchup_floor, temp=args.matchup_temp, decay=args.decay)
     pfsp = league.PFSP(power=args.pfsp_power, decay=args.decay)
-    best_state, best = None, float("-inf")
-    rng = random.Random(args.seed)
-    seed = args.seed
+    rng = random.Random(args.seed + 1_000_003 * start)
+    seed = args.seed + start * args.games
     with _pool(args.workers) as pool:
         baseline = None
         if tables:
             baseline = greedy_baseline(pool, args.workers, decks, args.baseline_games, args.engine, args.parallel,
                                        out / "greedy_baseline.json")
             sampler.set_baseline({k: s / n for k, (s, n) in baseline.items()})
-        for it in range(1, args.iters + 1):
+            last = out / "table_latest.json"
+            if args.resume and last.exists():  # the last table's results, as if just measured
+                t = json.loads(last.read_text())
+                for a, row in zip(t["decks"], t["win"]):
+                    for b, w in zip(t["decks"], row):
+                        if w is not None and (a, b) in pairings:
+                            sampler.record("greedy", (a, b), w * args.table_games, args.table_games)
+        for it in range(start + 1, args.iters + 1):
             t = time.time()
             state = _cpu_state(net)
             sampler.step()
@@ -534,7 +599,7 @@ def ppo(args) -> None:
             print(f"iter {it}: {len(obs)} decisions, play {t_play:.0f}s, learn {time.time() - t - t_play:.0f}s | "
                   f"{rates} | value loss {value_loss.item():.3f}, entropy {entropy.item():.2f}", flush=True)
 
-            save(net, str(out / "latest.pt"), matchups=pairings, iteration=it)
+            save(net, str(out / "latest.pt"), matchups=pairings, iteration=it, optimizer=_to_cpu(opt.state_dict()))
             if it % args.snapshot_every == 0:
                 snapshots[f"iter{it}"] = _cpu_state(net)
             if it % args.eval_every == 0 or it == args.iters:
@@ -649,6 +714,10 @@ def main(argv=None) -> None:
     tables(p)
     p.add_argument("--out", default="runs/ppo")
     p.add_argument("--init", help="start from this checkpoint (e.g. the imitation one)")
+    p.add_argument("--resume", action="store_true",
+                   help="continue the run in --out from its latest.pt (on this or another machine): the "
+                        "optimizer, the snapshot pool from its iterNNNN.pt files and best.pt carry over; "
+                        "pass the run's other flags again, with --iters as the total")
     p.add_argument("--iters", type=int, default=100)
     p.add_argument("--games", type=int, default=128, help="games per iteration")
     p.add_argument("--epochs", type=int, default=3)

@@ -244,10 +244,20 @@ per evaluation):
 
 ```bash
 .venv/bin/python -m optcg.nn.train imitate --decks decks/league15.txt --hidden 256 --games 6000 --out runs/league15_imitate.pt
-.venv/bin/python -m optcg.nn.train ppo --decks decks/league15.txt --init runs/league15_imitate.pt --out runs/league15 --iters 500 --games 256
+.venv/bin/python -m optcg.nn.train ppo --decks decks/league15.txt --init runs/league15_imitate.pt --out runs/league15 --iters 500 --games 256 --lr 1e-4 --entropy 0.001
 .venv/bin/python -m optcg.nn.train eval runs/league15/best.pt --decks decks/league15.txt --table-games 40 --baseline runs/league15/greedy_baseline.json --table runs/league15/final_table.json
 python3 tools/matchup_table.py runs/league15/final_table.json --edge --html runs/league15/final_table.html --open
 ```
+
+`--lr 1e-4 --entropy 0.001` matter here: with the defaults (3e-4, 0.01) the 15-deck run's policy
+flattened out (entropy 0.3 to 1.2) and its edge over greedy fell below zero, while these climbed to
++10% by iteration 130.
+
+To stop a run and carry on later, or on another machine, copy the run directory (at least
+`latest.pt`, `best.pt`, the last `--keep` `iterNNNN.pt` files, `greedy_baseline.json` and
+`table_latest.json`) and run the same `ppo` command with `--resume` in place of `--init`;
+`--iters` stays the total. The optimizer state, the snapshot pool and the best carry over; the
+matchup sampler restarts from the last table and PFSP from no results.
 
 `--hidden 256` widens the network (the default is 128); `--init` keeps the checkpoint's own size.
 A `--reference` checkpoint must be the same kind of network as the learner.
