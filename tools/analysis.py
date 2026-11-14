@@ -52,7 +52,7 @@ def curves(log: Path) -> dict:
     """Win rate against greedy while training (sampled moves) and at each evaluation (best move)."""
     out = {"train": [], "eval": []}
     it = 0
-    for line in log.read_text().splitlines():
+    for line in log.read_text(encoding="utf-8").splitlines():
         if m := ITER.match(line):
             it = int(m.group(1))
             out["train"].append([it, int(m.group(2)) / 100])
@@ -110,7 +110,7 @@ def main(argv=None) -> None:
             if isinstance(specs[a], str) and not isinstance(specs[b], str):
                 a, b = b, a  # the batched path wants the network first
             t = time.time()
-            win, draw, by_deck = evaluate(pool, args.workers, (MATCHUP,), specs[a], specs[b], 128, args.games,
+            win, draw, by_deck = evaluate(pool, args.workers, (MATCHUP, MATCHUP[::-1]), specs[a], specs[b], 128, args.games,
                                           engine="rust", parallel=16)
             score = win + draw / 2
             results[(a, b)] = {"score": score, "games": args.games}
@@ -128,7 +128,7 @@ def main(argv=None) -> None:
         "pairs": [{"a": a, "b": b, **{k: v for k, v in res.items() if k != "score"}} for (a, b), res in results.items()],
         "runs": [{"name": n, "about": d, **curves(ROOT / log)} for n, log, d in RUNS if (ROOT / log).is_file()],
     }
-    args.out.write_text(json.dumps(out, indent=1))
+    args.out.write_text(json.dumps(out, indent=1), encoding="utf-8")
     print(f"ratings: {', '.join(f'{n} {r}' for n, r in sorted(elo.items(), key=lambda x: -x[1]))}")
     print(f"-> {args.out} in {out['seconds']}s")
 

@@ -62,7 +62,7 @@ def main(argv=None) -> None:
     args = ap.parse_args(argv)
     if not args.key:
         ap.error("pass --key or set OPTCG_KEY")
-    deck = open(args.deck).read() if os.path.isfile(args.deck) else args.deck
+    deck = open(args.deck, encoding="utf-8").read() if os.path.isfile(args.deck) else args.deck
     start = {"deck": deck, **{k: v for k, v in (("opponent", args.opponent), ("opponent_deck", args.opponent_deck),
                                                 ("seat", args.seat)) if v is not None}}
     play(args.url, args.key, start, args.seed, args.verbose)

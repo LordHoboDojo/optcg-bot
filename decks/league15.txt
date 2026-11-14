@@ -1,0 +1,27 @@
+# The 15-deck league for multi-deck training (optcg.nn.train --decks decks/league15.txt).
+# Official decks, picked for spread: every color at least twice, aggro to control,
+# and Leaders whose abilities ask for different play (rule changes, Life tricks, DON!! returns,
+# Leaders that can't attack). One deck name per line; '#' starts a comment.
+
+# Red
+(Red) Roronoa Zoro                 # aggro: the cheapest curve here (2.3), every Character +1000 on your turn
+(Red) Edward.Newgate               # big-body midrange with no Blockers; the Leader trades hand for defence
+# Green
+(Green) Eustass"Captain"Kid        # 15 Blockers; the Leader pays 3 DON!! and a card to stand up and attack again
+(Green) Jewelry Bonney             # defensive green: the Leader rests an opponent's card when they attack
+# Blue
+(Blue) Rocks.D.Xebec               # the user's main deck (official list): trash to reveal, draw 2 on a Rocks Pirates hit
+(Blue) Donquixote Doflamingo       # blue control: 16 Blockers; attacks play Warlords off the top of the deck
+# Purple
+(Purple) Enel                      # rule-changing Leader: a 6-card DON!! deck and 20 Events (avg cost 1.4)
+(Purple) Kaido                     # DON!! -7 to trash a Life card: returning DON!! at its most extreme
+# Black
+(Black) Monkey.D.Luffy             # passive Leader (cost-12+ Characters gain Blocker); best in the old league (91% vs greedy)
+(Black) Rob Lucci                  # black removal: trash 2 and the Leader stands up when an opposing Character is K.O.'d
+# Yellow
+(Yellow) Charlotte Linlin          # the user's other main deck: the opponent picks Life for you or a card from them; 0 Blockers
+(Yellow) Vegapunk                  # 2 Life and a Leader that can't attack; plays Egghead cards or adds them to Life
+# Two-color
+(Red/Purple) Gol.D.Roger           # the only 7000-power Leader: DON!! go to it each turn, -2000 below 10 DON!!
+(Blue/Purple) Sanji                # 22 Events, avg cost 2.2, 4 Life: the Leader casts Events, so sequencing matters
+(Black/Yellow) Gecko Moria         # sacrifice: K.O. your own for +1000 to the team; trash 3 to gain Life

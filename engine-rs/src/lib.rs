@@ -120,6 +120,12 @@ mod py {
             Ok(d.unimplemented.clone())
         }
 
+        /// What a card's compiled effects do, as coarse tokens (agents::card_tokens).
+        fn card_tokens(&self, id: &str) -> PyResult<Vec<String>> {
+            let d = self.inner.get(id).ok_or_else(|| PyValueError::new_err(format!("unknown card id {id}")))?;
+            Ok(crate::agents::card_tokens(d))
+        }
+
         fn effect_count(&self, id: &str) -> PyResult<usize> {
             let d = self.inner.get(id).ok_or_else(|| PyValueError::new_err(format!("unknown card {id}")))?;
             Ok(d.effects.len())
@@ -229,6 +235,12 @@ mod py {
             let d = self.g.pending.clone().ok_or_else(|| PyValueError::new_err("the game is over"))?;
             let o = self.g.view(|e| crate::agents::encode(e, &d));
             Ok((o.scalars, o.cards, o.options, o.decision, o.player))
+        }
+
+        /// `player`'s own decklist (embedding indices, Leader first) and the opponent's Leader:
+        /// the deck conditioning optcg.env.encode_rust adds (agents::deck_obs).
+        fn deck_obs(&mut self, player: u8) -> (Vec<u32>, u32) {
+            self.g.view(|e| crate::agents::deck_obs(e, player))
         }
 
         /// The option GreedyAgent would pick.

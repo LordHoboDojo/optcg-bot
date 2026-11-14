@@ -46,7 +46,7 @@ def load_cards(path: str | None = None) -> dict[str, CardDef]:
     p = Path(path) if path else DATA / "cards.json"
     if not p.exists():
         raise FileNotFoundError(f"{p} not found; run: python3 tools/fetch_cards.py")
-    return {j["id"]: card_from_json(j) for j in json.loads(p.read_text())}
+    return {j["id"]: card_from_json(j) for j in json.loads(p.read_text(encoding="utf-8"))}
 
 
 def deck_from_counts(leader_id: str, counts: dict[str, int], cards: dict[str, CardDef] | None = None) -> Deck:
@@ -85,7 +85,7 @@ def official_decks(cards: dict[str, CardDef] | None = None) -> dict[str, Deck]:
     """The official recommended decks that pass deck validation, by name."""
     cards = cards or load_cards()
     out = {}
-    for d in json.loads((DATA / "decks.json").read_text()):
+    for d in json.loads((DATA / "decks.json").read_text(encoding="utf-8")):
         try:
             deck = deck_from_counts(d["leader"], d["cards"], cards)
             deck.validate()

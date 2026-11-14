@@ -26,7 +26,7 @@ def main(argv=None) -> None:
         files = art_files()
         if not files:
             raise SystemExit("no art in StreamingAssets/")
-        with open(args.art_manifest, "w") as f:
+        with open(args.art_manifest, "w", encoding="utf-8") as f:
             json.dump(files, f)
         return print(f"{len(files)} files -> {args.art_manifest}")
     setup()

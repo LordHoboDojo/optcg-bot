@@ -226,6 +226,13 @@ the learner on either side, so one bot learns them all and far more cards see re
 .venv/bin/python -m optcg.nn.train eval runs/league/latest.pt --league --vs greedy
 ```
 
+`--decks decks/league15.txt` trains on a chosen league instead: 15 official decks, every color
+twice or more, aggro to control (the file says why each is there). The network reads its own
+decklist and the opponent's Leader, matchups where it beats greedy by the least come up most,
+and every evaluation prints a 15 x 15 matchup table against greedy
+(`tools/matchup_table.py` renders it). Details and the full-run commands are in
+[docs/architecture/python.md](docs/architecture/python.md#the-multi-deck-league---decks-nnleaguepy).
+
 The network (`optcg/nn/model.py`) embeds each visible card, mixes them with one attention layer,
 and scores every legal option against the pooled state; a value head predicts the result.
 `ppo` plays games in parallel worker processes against GreedyAgent and frozen snapshots of

@@ -77,13 +77,14 @@ class Training(unittest.TestCase):
 
     def test_imitation_data_matches_python(self):
         from optcg.nn.train import _imitation_games
-        pairs = (("(Blue) Rocks.D.Xebec", "(Black) Monkey.D.Luffy"),)
-        py = _imitation_games((pairs, [0, 1], "python"))
-        rs = _imitation_games((pairs, [0, 1], "rust"))
+        jobs = [(seed, "(Blue) Rocks.D.Xebec", "(Black) Monkey.D.Luffy", seed % 2, None) for seed in (0, 1)]
+        py = _imitation_games((jobs, "python"))
+        rs = _imitation_games((jobs, "rust"))
         self.assertEqual(len(py), len(rs))
         for (o1, k1), (o2, k2) in zip(py, rs):
             self.assertEqual(k1, k2)
             self.assertEqual(o1["cards"], [list(r) for r in o2["cards"]])
+            self.assertEqual((o1["deck"], o1["opp_leader"]), (o2["deck"], o2["opp_leader"]))
 
 
 @unittest.skipIf(optcg_rs is None, "optcg_rs not built")

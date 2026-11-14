@@ -142,7 +142,7 @@ def main():
             summary[spec] = report(f"{spec} vs {args.vs} ({args.games} games, {time.time() - t0:.0f}s)", turns,
                                    args.show)
     if args.json:
-        Path(args.json).write_text(json.dumps(summary, indent=2))
+        Path(args.json).write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":

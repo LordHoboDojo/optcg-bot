@@ -40,8 +40,8 @@ def _search_games(args):
     player deciding) for every decision that had a choice. The first `explore` of those in a
     game are played by sampling from the visit shares, so games differ; after that, the most
     visited option."""
-    state, hidden, decks, seeds, kw, explore = args
-    bot = MCTSAgent(_net(state, hidden), **kw)
+    state, config, decks, seeds, kw, explore = args
+    bot = MCTSAgent(_net(state, config), **kw)
     out = []
     for seed in seeds:
         bot.rng.seed(seed)
@@ -122,10 +122,10 @@ def main(argv=None) -> None:
     out.mkdir(parents=True, exist_ok=True)
     device = _device(args.device)
     net = load(args.init).to(device)
-    hidden = net.hidden
+    config = net.config()
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
     reference = load(args.reference).state_dict() if args.reference else None
-    pairings = ((args.deck0, args.deck1),)
+    pairings = [(args.deck0, args.deck1), (args.deck1, args.deck0)]
     kw = dict(sims=args.sims, worlds=args.worlds, noise=args.noise)
     buffer: deque = deque(maxlen=args.buffer)
     best, seed = -1.0, args.seed
@@ -135,7 +135,7 @@ def main(argv=None) -> None:
             seeds = list(range(seed, seed + args.games))
             seed += args.games
             state = _cpu_state(net)
-            parts = pool.map(_search_games, [(state, hidden, pairings[0], s, kw, args.explore)
+            parts = pool.map(_search_games, [(state, config, pairings[0], s, kw, args.explore)
                                              for s in _split(seeds, args.workers)])
             buffer.append([x for part in parts for x in part])
             t_play = time.time() - t
@@ -146,7 +146,7 @@ def main(argv=None) -> None:
             save(net, str(out / "latest.pt"), matchups=pairings, iteration=it)
 
             if reference is not None and (it % args.eval_every == 0 or it == args.iters):
-                win, draw, _ = evaluate(pool, args.workers, pairings, _cpu_state(net), reference, hidden,
+                win, draw, _ = evaluate(pool, args.workers, pairings, _cpu_state(net), reference, config,
                                         args.eval_games, "rust")
                 print(f"  eval vs {args.reference} (no search, {args.eval_games} games): wins {win:.1%}, "
                       f"draws {draw:.1%}", flush=True)

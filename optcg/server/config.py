@@ -73,7 +73,7 @@ class Config:
 
     def art_files(self) -> Optional[tuple[str, ...]]:
         """The art file list from the manifest, or None to look in StreamingAssets."""
-        return tuple(json.loads(self.art_manifest.read_text())) if self.art_manifest else None
+        return tuple(json.loads(self.art_manifest.read_text(encoding="utf-8"))) if self.art_manifest else None
 
     def load_decks(self) -> dict[str, Deck]:
         """The decks people and bots may pick, by name. Only these names are ever looked up, so a

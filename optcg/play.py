@@ -81,7 +81,7 @@ def resolve_deck(spec: str) -> Deck:
     from .carddb import find_deck, parse_decklist
     for path in (Path(spec), DECK_DIR / f"{spec}.txt"):
         if path.is_file():
-            deck = parse_decklist(path.read_text())
+            deck = parse_decklist(path.read_text(encoding="utf-8"))
             deck.validate()
             return deck
     return find_deck(spec)
