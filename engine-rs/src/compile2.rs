@@ -1041,8 +1041,12 @@ pub fn body2(text: &str) -> Res<Body> {
         return Err(Unsupported);
     }
     let mut parts: Vec<Body> = vec![];
-    let mut i = 0;
+    // the sentence each part starts at
+    let mut starts: Vec<usize> = vec![];
+    let (mut i, mut last) = (0, 0);
     while i < ss.len() {
+        starts.resize(parts.len(), last);
+        last = i;
         let s = strip_then(&ss[i]);
         let next = ss.get(i + 1).map(|x| strip_then(x));
         if let Some((b, used)) = look(&s, next.as_deref()) {
@@ -1136,10 +1140,28 @@ pub fn body2(text: &str) -> Res<Body> {
         parts.push(sentence(&s)?);
         i += 1;
     }
-    let mut it = parts.into_iter().rev();
-    let mut acc = it.next().unwrap();
-    for p in it {
-        acc = Body::Seq(Box::new(p), Box::new(acc));
+    starts.resize(parts.len(), last);
+    // 4-10-1: when an "If" sentence's condition fails, the "Then," sentences after it don't
+    // resolve either, so they go inside its condition. Not for a condition on a revealed card,
+    // where the "Then," sentence puts that card away whatever it was.
+    let gated = |k: usize| {
+        let s = strip_then(&ss[starts[k]]);
+        matches!(parts[k], Body::If(..))
+            && k + 1 < parts.len()
+            && starts[k + 1] > starts[k]
+            && s.starts_with("If ")
+            && !s.starts_with("If the revealed card")
+            && !s.starts_with("If that card")
+            && ss[starts[k + 1]].trim_start().starts_with("Then")
+    };
+    let gates: Vec<bool> = (0..parts.len()).map(gated).collect();
+    let mut it = parts.into_iter().enumerate().rev();
+    let mut acc = it.next().unwrap().1;
+    for (k, p) in it {
+        acc = match p {
+            Body::If(c, inner) if gates[k] => Body::If(c, Box::new(Body::Seq(inner, Box::new(acc)))),
+            p => Body::Seq(Box::new(p), Box::new(acc)),
+        };
     }
     Ok(acc)
 }
