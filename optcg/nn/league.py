@@ -15,6 +15,8 @@ MatchupSampler  prioritises the matchups where the learner's edge over a referen
 PFSP            AlphaStar's prioritised fictitious self-play: snapshot opponents are weighted by
                 (1 - P[learner beats them]) ** power, so the ones the learner still loses to
                 come up most.
+MetaGame        head-to-head results between league members (main-agent checkpoints, exploiter
+                copies, greedy), ranked by the Nash equilibrium of that meta-game as in PSRO.
 
 Win rates count a draw as half a win. Both trackers decay old results (`decay` per iteration)
 because the learner keeps changing, and start from a weak prior at the baseline (sampler) or
@@ -203,3 +205,122 @@ def summary(t: dict) -> str:
 def save_table(t: dict, path: str | Path) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(t, indent=1), encoding="utf-8")
+
+
+# ---------------------------------------------------------------- the Nash meta-game (PSRO-style ranking)
+
+def nash(payoff: list[list[float]], iters: int = 5000) -> list[float]:
+    """A Nash equilibrium of the symmetric zero-sum game where payoff[i][j] is i's expected result
+    against j, centred so that payoff[j][i] == -payoff[i][j]. Regret matching+ with linearly
+    weighted averaging (its average strategy converges to an equilibrium; both players share it
+    since the game is symmetric)."""
+    import numpy as np
+    a = np.asarray(payoff, dtype=float)
+    n = len(a)
+    if n == 1:
+        return [1.0]
+    regret, avg = np.zeros(n), np.zeros(n)
+    for t in range(1, iters + 1):
+        pos = np.maximum(regret, 0.0)
+        x = pos / pos.sum() if pos.sum() > 0 else np.full(n, 1.0 / n)
+        u = a @ x
+        regret = np.maximum(regret + u - x @ u, 0.0)
+        avg += t * x
+    p = avg / avg.sum()
+    p[p < 1e-4] = 0.0
+    return [float(x) for x in p / p.sum()]
+
+
+class MetaGame:
+    """Head-to-head results between league members (main-agent checkpoints, exploiter copies,
+    greedy) and their ranking by the Nash meta-game, as in PSRO and Nash averaging: a member's
+    rating is its expected result against the Nash mixture of the whole population, so a
+    checkpoint that only beats easy opponents, or is beaten by an exploiter, doesn't come out on
+    top just by farming them. A rating of 0 means nobody in the population does better against
+    the mixture. Win rates count draws as half and start from a prior of one win in two games."""
+
+    def __init__(self):
+        self.members: list[str] = []
+        self.kind: dict[str, str] = {}
+        self.results: dict[tuple[str, str], list[float]] = {}
+
+    def add(self, name: str, kind: str) -> None:
+        if name in self.kind:
+            raise ValueError(f"{name} is already a member")
+        self.members.append(name)
+        self.kind[name] = kind
+
+    def remove(self, name: str) -> None:
+        self.members.remove(name)
+        del self.kind[name]
+        self.results = {k: v for k, v in self.results.items() if name not in k}
+
+    def record(self, a: str, b: str, score: float, games: float) -> None:
+        """`a` scored `score` (wins, a draw counting 1/2) in `games` games against `b`."""
+        for k, s in (((a, b), score), ((b, a), games - score)):
+            r = self.results.setdefault(k, [0.0, 0.0])
+            r[0] += s
+            r[1] += games
+
+    def games(self, a: str, b: str) -> float:
+        return self.results.get((a, b), (0.0, 0.0))[1]
+
+    def rate(self, a: str, b: str) -> float:
+        w, n = self.results.get((a, b), (0.0, 0.0))
+        return (w + 1) / (n + 2)
+
+    def payoff(self) -> list[list[float]]:
+        return [[0.0 if a == b else self.rate(a, b) - 0.5 for b in self.members] for a in self.members]
+
+    def solve(self) -> dict[str, tuple[float, float]]:
+        """{member: (its weight in the Nash mixture, its expected result against the mixture)}."""
+        a = self.payoff()
+        p = nash(a)
+        return {m: (p[i], sum(x * w for x, w in zip(a[i], p))) for i, m in enumerate(self.members)}
+
+    def ranking(self, kind: str | None = None) -> list[str]:
+        """Members (of `kind`, if given) from best to worst: by result against the Nash mixture,
+        rounded to 1%, then by weight in it."""
+        sol = self.solve()
+        names = [m for m in self.members if kind is None or self.kind[m] == kind]
+        return sorted(names, key=lambda m: (round(sol[m][1], 2), sol[m][0]), reverse=True)
+
+    def prune(self, limit: int, keep: set[str]) -> list[str]:
+        """Drop members, never those in `keep`, until at most `limit` are left: those with the
+        least weight in the Nash mixture first, the oldest among equals. Returns the dropped."""
+        dropped = []
+        while len(self.members) > limit:
+            sol = self.solve()
+            order = [m for m in self.members if m not in keep]
+            if not order:
+                break
+            m = min(order, key=lambda x: (sol[x][0], self.members.index(x)))
+            self.remove(m)
+            dropped.append(m)
+        return dropped
+
+    def to_json(self) -> dict:
+        return {"members": [[m, self.kind[m]] for m in self.members],
+                "results": [[a, b, w, n] for (a, b), (w, n) in self.results.items()]}
+
+    @classmethod
+    def from_json(cls, d: dict) -> "MetaGame":
+        g = cls()
+        for m, kind in d["members"]:
+            g.add(m, kind)
+        g.results = {(a, b): [w, n] for a, b, w, n in d["results"]}
+        return g
+
+    def format(self, top: int = 8) -> str:
+        sol = self.solve()
+        rows = sorted(self.members, key=lambda m: (round(sol[m][1], 2), sol[m][0]), reverse=True)[:top]
+        return ", ".join(f"{m} {sol[m][1]:+.1%} (Nash {sol[m][0]:.2f})" for m in rows)
+
+
+def weakest(t: dict, k: int, key: str = "edge") -> list[tuple[str, str]]:
+    """The `k` matchups of a matchup table with the lowest `key` (edge over greedy by default):
+    where a main exploiter should look for holes."""
+    decks = t["decks"]
+    cells = [(t[key][i][j], a, b) for i, a in enumerate(decks) for j, b in enumerate(decks)
+             if t[key][i][j] is not None]
+    return [(a, b) for _, a, b in sorted(cells)[:k]]

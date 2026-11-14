@@ -1,12 +1,13 @@
 """Multi-deck league bookkeeping (optcg/nn/league.py): deck files, matchup sampling, PFSP, the
 matchup table. The sampler and PFSP are plain Python; the job assignment test needs PyTorch."""
+import json
 import random
 import tempfile
 import unittest
 from pathlib import Path
 
-from optcg.nn.league import (PFSP, MatchupSampler, format_table, ordered_matchups, read_decks, summary,
-                             table)
+from optcg.nn.league import (PFSP, MatchupSampler, MetaGame, format_table, nash, ordered_matchups, read_decks,
+                             summary, table, weakest)
 
 try:
     import torch
@@ -161,6 +162,67 @@ class Table(unittest.TestCase):
                 matchup_table.main([str(p), "--edge", "--html", str(h)])
             self.assertIn("mean edge over greedy +0.0%", out.getvalue())
             self.assertIn("<table>", h.read_text(encoding="utf-8"))
+
+
+class Nash(unittest.TestCase):
+    def test_rock_paper_scissors_is_uniform(self):
+        p = nash([[0, -0.5, 0.5], [0.5, 0, -0.5], [-0.5, 0.5, 0]])
+        for x in p:
+            self.assertAlmostEqual(x, 1 / 3, delta=0.01)
+
+    def test_a_dominated_member_gets_no_weight(self):
+        p = nash([[0, 0.2, 0.3], [-0.2, 0, 0.1], [-0.3, -0.1, 0]])
+        self.assertAlmostEqual(p[0], 1.0, delta=1e-3)
+        self.assertEqual(sum(p), 1.0)
+
+    def test_nothing_beats_the_mixture(self):
+        a = [[0, 0.3, -0.2, 0.1], [-0.3, 0, 0.25, 0.05], [0.2, -0.25, 0, -0.1], [-0.1, -0.05, 0.1, 0]]
+        p = nash(a)
+        best_reply = max(sum(x * w for x, w in zip(row, p)) for row in a)
+        self.assertLess(best_reply, 0.005)
+
+
+class Meta(unittest.TestCase):
+    def setUp(self):
+        self.g = MetaGame()
+        for m, kind in (("greedy", "greedy"), ("iter10", "main"), ("iter20", "main"), ("mx1.g1", "exploiter")):
+            self.g.add(m, kind)
+
+    def test_results_go_both_ways(self):
+        self.g.record("iter10", "greedy", 30, 40)
+        self.assertEqual(self.g.games("greedy", "iter10"), 40)
+        self.assertAlmostEqual(self.g.rate("iter10", "greedy") + self.g.rate("greedy", "iter10"), 1.0)
+        a = self.g.payoff()
+        self.assertAlmostEqual(a[1][0], -a[0][1])
+
+    def test_the_main_checkpoint_the_exploiter_cant_beat_ranks_first(self):
+        """iter20 beats greedy by more, but an exploiter beats it; iter10 holds the exploiter off."""
+        g = self.g
+        g.record("iter10", "greedy", 60, 100)
+        g.record("iter20", "greedy", 80, 100)
+        g.record("iter10", "iter20", 50, 100)
+        g.record("mx1.g1", "iter20", 90, 100)
+        g.record("mx1.g1", "iter10", 30, 100)
+        g.record("mx1.g1", "greedy", 50, 100)
+        self.assertEqual(g.ranking("main")[0], "iter10")
+        self.assertEqual(set(g.ranking()), set(g.members))
+
+    def test_prune_keeps_what_it_is_told_and_json_round_trips(self):
+        g = self.g
+        g.record("iter20", "iter10", 90, 100)
+        g.record("iter20", "greedy", 90, 100)
+        g.record("iter20", "mx1.g1", 90, 100)
+        dropped = g.prune(2, keep={"greedy", "iter20"})
+        self.assertEqual(len(dropped), 2)
+        self.assertEqual(g.members, ["greedy", "iter20"])
+        self.assertFalse(any("iter10" in k for k in g.results))
+        back = MetaGame.from_json(json.loads(json.dumps(g.to_json())))
+        self.assertEqual(back.members, g.members)
+        self.assertEqual(back.rate("iter20", "greedy"), g.rate("iter20", "greedy"))
+
+    def test_weakest_matchups(self):
+        t = {"decks": ["a", "b"], "edge": [[0.1, -0.3], [None, -0.1]]}
+        self.assertEqual(weakest(t, 2), [("a", "b"), ("b", "b")])
 
 
 @unittest.skipIf(torch is None, "PyTorch not installed")
