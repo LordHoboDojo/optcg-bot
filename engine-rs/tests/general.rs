@@ -310,3 +310,38 @@ fn ko_up_to_two_with_a_total_power() {
     assert_eq!(zone(&g, a), Some(Zone::Trash));
     assert_eq!(zone(&g, b), Some(Zone::Character));
 }
+
+#[test]
+fn a_failed_if_also_stops_the_then_sentence() {
+    // 4-10-1: "If A, X. Then, Y." does neither X nor Y when A is false (Brochette Blow, OP12-078:
+    // "If the number of DON!! cards on your field is equal to or less than the number on your
+    // opponent's field, draw 1 card. Then, give up to 1 of your opponent's Characters -3000 power")
+    let db = db();
+    for holds in [true, false] {
+        let mut g = game(&db, [&["OP12-078"], &[]]);
+        let mut t = vec![];
+        let ev = card(&g, 0, "OP12-078", &mut t);
+        let theirs = card(&g, 1, FILLER, &mut t);
+        g.arrange(|e| {
+            e.mv(ev, Zone::Hand);
+            e.mv(theirs, Zone::Character);
+            e.psm(0).don_active = 6;
+            e.psm(0).don_rested = 0;
+            e.psm(1).don_active = if holds { 8 } else { 2 };
+            e.psm(1).don_rested = 0;
+        });
+        let hand = g.state.players[0].hand.len();
+        let power = g.view(|e| e.power(theirs));
+        pick(&mut g, |o| o.kind == ActKind::Play && o.card == Some(ev));
+        if has(&g, |o| o.card == Some(theirs)) {
+            pick(&mut g, |o| o.card == Some(theirs));
+        }
+        if holds {
+            assert_eq!(g.state.players[0].hand.len(), hand, "played 1, drew 1");
+            assert_eq!(g.view(|e| e.power(theirs)), power - 3000);
+        } else {
+            assert_eq!(g.state.players[0].hand.len(), hand - 1, "no draw");
+            assert_eq!(g.view(|e| e.power(theirs)), power, "no -3000 either");
+        }
+    }
+}
