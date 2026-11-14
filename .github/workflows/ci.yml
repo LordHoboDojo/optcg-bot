@@ -34,11 +34,12 @@ jobs:
         with:
           workspaces: engine-rs
       - name: Install dependencies
-        # torch from PyTorch's CPU-only index (as in the Dockerfile); its dependencies from PyPI
+        # torch from PyTorch's CPU-only index (as in the Dockerfile); its dependencies from PyPI.
+        # numpy for the training code (the league's Nash ranking); torch doesn't pull it in.
         run: |
           pip install --index-url https://download.pytorch.org/whl/cpu \
             --extra-index-url https://pypi.org/simple "torch==2.14.1"
-          pip install -r requirements-server.txt "maturin>=1.5,<2.0"
+          pip install -r requirements-server.txt "maturin>=1.5,<2.0" "numpy>=2.0,<3"
       - name: Build the Rust engine
         run: |
           maturin build --release -m engine-rs/Cargo.toml -o dist
