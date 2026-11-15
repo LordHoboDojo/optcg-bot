@@ -16,6 +16,7 @@ two compare directly:
 
     .venv/bin/python -m optcg.search runs/rocks/latest.pt --vs net --games 200
     .venv/bin/python -m optcg.search runs/rocks/latest.pt --vs greedy --sims 400
+    .venv/bin/python -m optcg.search runs/league15_lr/best.pt --vs net --decks decks/league15.txt --games 900
 
 It needs the Rust engine (engine-rs/).
 """
@@ -175,15 +176,15 @@ def _opponent(spec: str, net: PolicyNet) -> Agent:
 
 
 def _games(args):
-    """One worker's games: (seat the search bot played, winner, seconds it spent searching)."""
-    checkpoint, vs, decks, seeds, kw = args
+    """One worker's games, each (seed, decks in seat order, the search bot's seat): returns
+    (decks, seat, winner, seconds the search bot spent searching) per game."""
+    checkpoint, vs, jobs, kw = args
     from .nn.train import _decks
     torch.set_num_threads(1)
     net = load(checkpoint)
     bot, other = MCTSAgent(net, **kw), _opponent(vs, net)
     out = []
-    for seed in seeds:
-        seat = seed % 2
+    for seed, decks, seat in jobs:
         bot.rng.seed(seed)
         clock = [0.0]
 
@@ -195,8 +196,20 @@ def _games(args):
                 return i
 
         agents = (Timed(), other) if seat == 0 else (other, Timed())
-        out.append((seat, play_rust(_decks(decks), agents, seed=seed).winner, clock[0]))
+        out.append((decks, seat, play_rust(_decks(decks), agents, seed=seed).winner, clock[0]))
     return out
+
+
+def jobs_for(decks: Optional[list], deck0: str, deck1: str, games: int, seed: int) -> list[tuple]:
+    """The games to play: with a deck list, every ordered matchup (mirrors included) in turn, each
+    from both seats (as train.evaluate does); otherwise deck0 vs deck1 with the seats alternating.
+    Each job is (seed, decks in seat order, the search bot's seat)."""
+    if not decks:
+        return [(s, (deck0, deck1), s % 2) for s in range(seed, seed + games)]
+    from .nn.league import ordered_matchups
+    from .nn.train import _round_robin, _seated
+    return [(s, _seated(mine, theirs, seat), seat)
+            for s, mine, theirs, seat, _ in _round_robin(ordered_matchups(decks), games, seed)]
 
 
 def main(argv=None) -> None:
@@ -207,6 +220,7 @@ def main(argv=None) -> None:
                                                 "or another .pt checkpoint")
     ap.add_argument("--deck0", default=DECKS[0])
     ap.add_argument("--deck1", default=DECKS[1])
+    ap.add_argument("--decks", help="a deck file (e.g. decks/league15.txt): play every matchup in turn, both seats")
     ap.add_argument("--games", type=int, default=200, help="seats alternate")
     ap.add_argument("--sims", type=int, default=200, help="simulations per decision")
     ap.add_argument("--worlds", type=int, default=32, help="determinizations per decision")
@@ -216,23 +230,31 @@ def main(argv=None) -> None:
     ap.add_argument("--seed", type=int, default=20_000)
     args = ap.parse_args(argv)
 
+    decks = None
+    if args.decks:
+        from .nn.league import read_decks
+        decks = read_decks(args.decks)
     kw = dict(sims=args.sims, worlds=args.worlds, batch=args.batch, c_puct=args.c_puct)
-    seeds = list(range(args.seed, args.seed + args.games))
-    parts = [seeds[i::args.workers] for i in range(args.workers) if seeds[i::args.workers]]
+    jobs = jobs_for(decks, args.deck0, args.deck1, args.games, args.seed)
+    parts = [jobs[i::args.workers] for i in range(args.workers) if jobs[i::args.workers]]
     t = time.time()
     with mp.get_context("spawn").Pool(len(parts)) as pool:
-        results = [r for part in pool.map(_games, [(args.checkpoint, args.vs, (args.deck0, args.deck1), s, kw)
-                                                     for s in parts]) for r in part]
-    wins = sum(w == s for s, w, _ in results)
-    draws = sum(w is None for _, w, _ in results)
-    print(f"search ({args.sims} sims) with {args.checkpoint} vs {args.vs}: wins {wins / len(results):.1%}, "
-          f"draws {draws / len(results):.1%} over {len(results)} games in {time.time() - t:.0f}s")
-    for seat in (0, 1):
-        rows = [r for r in results if r[0] == seat]
-        if rows:
-            name = (args.deck0, args.deck1)[seat]
-            print(f"    as {name.split(') ')[-1]:18} {sum(w == seat for _, w, _ in rows) / len(rows):5.1%} ({len(rows)})")
-    print(f"    search time per game: {sum(r[2] for r in results) / len(results):.1f}s")
+        results = [r for part in pool.map(_games, [(args.checkpoint, args.vs, p, kw) for p in parts]) for r in part]
+    n = len(results)
+    wins = sum(w == s for _, s, w, _ in results)
+    draws = sum(w is None for _, _, w, _ in results)
+    score = (wins + draws / 2) / n
+    margin = 1.96 * math.sqrt(max(score * (1 - score), 1e-9) / n)
+    print(f"search ({args.sims} sims) with {args.checkpoint} vs {args.vs}: wins {wins / n:.1%}, "
+          f"draws {draws / n:.1%} over {n} games in {time.time() - t:.0f}s (score {score:.1%} +/- {margin:.1%})")
+    by_deck: dict = {}
+    for d, s, w, _ in results:  # the deck the search bot played
+        row = by_deck.setdefault(d[s], [0, 0])
+        row[0] += w == s
+        row[1] += 1
+    for name, (w, k) in sorted(by_deck.items(), key=lambda kv: kv[1][0] / kv[1][1]):
+        print(f"    as {name.split(') ')[-1]:18} {w / k:5.1%} ({k})")
+    print(f"    search time per game: {sum(r[3] for r in results) / n:.1f}s")
 
 
 if __name__ == "__main__":

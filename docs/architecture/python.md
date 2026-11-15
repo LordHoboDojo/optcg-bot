@@ -212,7 +212,8 @@ flowchart LR
 - **`nn/distill.py`** (expert iteration): games of the network against itself with search on
   both sides; every searched decision keeps the share of visits each option got and, at the
   end, the result. The network learns to match the visit shares (cross-entropy) and to predict
-  the result (value head). Needs the Rust engine.
+  the result (value head). `--decks FILE` does it across a league (phase 3, below). Needs the
+  Rust engine.
 
 ### The multi-deck league (`--decks`, `nn/league.py`)
 
@@ -309,6 +310,62 @@ and `mx1.pt` / `lx1.pt` the exploiters with their optimizers, so `--resume` pick
 Each iteration plays 512 games (256 for the main agent, 128 per exploiter) and runs three PPO
 updates; each evaluation adds the 1,800-game table and the new member's head-to-head games.
 
+Phase 2's best (iteration 130) tied phase 1's head-to-head (49.6% over 9,000 games) at about
++10% over greedy: the exploiters kept training stable but found nothing to exploit, and PPO had
+levelled off.
+
+#### Phase 3: learning from search (`nn/distill.py --decks`)
+
+`distill.py --decks FILE` runs expert iteration across the league. Each iteration plays `--games`
+self-play games with search on both sides (`search.MCTSAgent`, `--sims` simulations over
+`--worlds` determinizations, the first `--explore` decisions sampled from the visit shares). Every searched decision is kept with its visit shares and the
+game's result, and the network fits them (cross-entropy and value MSE) over the last `--buffer`
+iterations' positions. The log's "KL" is the policy loss minus the targets' own entropy: how far
+the plain network still is from the search's choices.
+
+`--noise` (Dirichlet noise at the root, AlphaZero's exploration) defaults to 0 here. The PPO
+network and a 256-simulation search agree on the best option 92% of the time, so the search mostly
+follows its prior, and noise mixed into the prior goes straight into the visit shares the network
+learns: with 0.25, the KL between the targets and the network rose from 0.1 to 0.8 and two
+iterations took the plain network from +10.1% to +1.4% over greedy. Sampling the first
+`--explore` decisions varies the games instead.
+
+- **Matchups** come from `league.MatchupSampler` fed by the matchup tables (edge over greedy
+  only, no decay), with `--matchup-floor` (50%) spread evenly; `--targets` seeds it from an
+  earlier table (e.g. the 40-game final evaluation of `--init`). The first deck of a drawn
+  matchup takes a random seat; both players' decisions are learned.
+- **Evaluation** (every `--eval-every`) judges the plain network, no search: the matchup table
+  against greedy and, with `--reference`, `--eval-games` head-to-head games against it over every
+  matchup, with a 95% margin. The head-to-head plays each deal twice with the same seed and seats,
+  the learner holding one deck and then the other (`distill.paired_jobs`): a network against
+  itself scores exactly 50%, and deck strength and lucky deals cancel. The starting checkpoint is judged first
+  (iteration 0), so `best.pt` (best result against `--reference`, else the best mean edge) never
+  ends up worse than `--init`.
+- **`--resume`** continues from `latest.pt` and its optimizer state; the replay buffer refills.
+
+Before a long run, check that search beats the plain network at the run's `--sims`, or there is
+nothing to learn from it:
+
+```bash
+.venv/bin/python -m optcg.search runs/league15_lr/best.pt --vs net --decks decks/league15.txt --games 900 --sims 256
+```
+
+For phase 1's iteration-130 checkpoint over 450 games: 64 simulations scored 52.4% against the
+plain network, and 256 simulations (32 worlds) 57.3% (both +/- 4.6%), about 8 s of search per
+game on one M2 Max core. So the run searches with 256:
+
+```bash
+.venv/bin/python -m optcg.nn.distill --decks decks/league15.txt --init runs/league15_lr/best.pt \
+  --reference runs/league15_lr/best.pt --targets runs/league15_p2/final_p1best.json --out runs/league15_p3 \
+  --iters 60 --games 128 --sims 256 --worlds 32 --lr 1e-4 --buffer 6 --eval-every 5 --eval-games 900
+```
+
+A self-play game with search on both sides takes about 20 s on one core (about 110 searched
+decisions); learning is a few seconds; an evaluation (1,800 games against greedy, 900
+head-to-head) about 15 s on 10 M2 Max workers. In a 3-iteration smoke run on 40 games each, the
+plain network stayed level with where it started (head-to-head 50.7%, 51.1%, 48.4%, each
++/- 4.6%) while the KL fell from 0.093 to 0.074.
+
 ## Search: MCTS with determinization
 
 `search.MCTSAgent` (spec `mcts:<checkpoint>`) is information-set Monte Carlo tree search guided by
@@ -352,7 +409,7 @@ sequenceDiagram
   scored in batches, with virtual loss keeping a batch's simulations on different paths.
 - **Noise.** `noise` mixes Dirichlet noise into the root's priors, for training games.
 - `python -m optcg.search CHECKPOINT --vs net|greedy --games N` compares the search with the
-  plain network or greedy.
+  plain network or greedy; `--decks FILE` plays every matchup of a league from both seats.
 
 ## Tests
 
